@@ -7,18 +7,19 @@ The Goldsky SDK handles two separate secrets. Never confuse them.
 | Secret | Used by | Where it goes | How it is obtained |
 | --- | --- | --- | --- |
 | REST project API token | REST control plane (`Client`) | `Authorization: Bearer <token>` header | Goldsky dashboard project settings |
-| Edge endpoint API key | Edge RPC (`RPC`) | URL query `?key=<key>` | `Edge.Create` (one-time) or `Edge.RevealKey` |
+| Edge endpoint API key | Edge RPC (`RPC`) | `X-ERPC-Secret-Token` header | `Edge.Create` (one-time) or `Edge.RevealKey` |
 
 The REST token is scoped to a single project and is never part of a REST path.
-The Edge key is per-endpoint and is carried in the Edge RPC query string.
+The Edge key is per-endpoint. Goldsky also documents a `?secret=` query form,
+but the SDK deliberately uses the header so the value does not enter URLs,
+browser history, proxy request lines, or ordinary access logs.
 
 ## What the SDK never logs or leaks
 
 - The REST API token is never included in error messages, `Error()` strings,
   problem details, or logs.
-- The Edge API key is never included in error messages, RPC error strings, or
-  logs. The RPC URL is constructed with the key in the query string; the SDK
-  never logs the full URL.
+- The Edge API key is never included in URLs, error messages, RPC error strings,
+  or SDK logs.
 - Webhook create secrets and Edge create API keys are returned to the caller
   but never written to logs by the SDK.
 
@@ -46,6 +47,14 @@ idempotency keys. Automatic retry applies only to safe reads (`GET`, `HEAD`,
 retry with `WithRetryMutations()` only when you understand the risk. Streaming
 subgraph deployments are never retried because their readers cannot be replayed
 safely.
+
+## Bounded diagnostic bodies
+
+REST, GraphQL, and Edge RPC responses are buffered and limited to 16 MiB by
+default. Use `WithMaxResponseBodyBytes` only when a legitimate response needs a
+different cap. Non-2xx REST responses retain the bounded body in
+`ProblemDetails.RawBody`; do not log it blindly because upstream services may
+echo request data.
 
 ## RBAC
 

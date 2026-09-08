@@ -4,15 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 )
+
+// EdgeSecretHeader is the documented header used to authenticate Edge RPC
+// requests without putting the secret in URLs or access logs.
+const EdgeSecretHeader = "X-ERPC-Secret-Token"
 
 // RPCError is a JSON-RPC 2.0 error object.
 type RPCError struct {
@@ -58,10 +61,10 @@ type RPCBatchCall struct {
 //
 // The Edge endpoint URL is
 //
-//	https://edge.goldsky.com/standard/evm/{chainId}?key={edgeAPIKey}
+//	https://edge.goldsky.com/standard/evm/{chainId}
 //
 // The Edge API key is a separate secret from the REST project Bearer token and
-// is carried in the query string; it is never logged or included in error
+// is sent in X-ERPC-Secret-Token; it is never logged or included in error
 // messages. Goldsky documents HTTPS only; there is no WebSocket/subscription
 // support.
 type RPCService struct {
@@ -72,12 +75,10 @@ type RPCService struct {
 	mu         sync.RWMutex
 }
 
-// EndpointURL builds the Edge RPC URL for the given chain ID. The Edge API key
-// is included as a query parameter.
+// EndpointURL builds the Edge RPC URL for the given chain ID. Authentication
+// is added separately as a header, so this URL never contains the Edge secret.
 func (s *RPCService) EndpointURL(chainID int64) string {
-	q := url.Values{}
-	q.Set("key", s.apiKey())
-	return strings.TrimRight(s.baseURL, "/") + "/" + strconv.FormatInt(chainID, 10) + "?" + q.Encode()
+	return strings.TrimRight(s.baseURL, "/") + "/" + strconv.FormatInt(chainID, 10)
 }
 
 func (s *RPCService) apiKey() string {
@@ -115,6 +116,9 @@ func (s *RPCService) Call(ctx context.Context, chainID int64, method string, par
 	if err != nil {
 		return err
 	}
+	if err := validateRPCPayload(resp); err != nil {
+		return &TransportError{Op: "rpc.Call", Err: err}
+	}
 	if resp.Error != nil {
 		return resp.Error
 	}
@@ -151,10 +155,23 @@ func (s *RPCService) Batch(ctx context.Context, chainID int64, calls []RPCBatchC
 	if err != nil {
 		return nil, err
 	}
+	expectedIDs := make(map[int64]struct{}, len(reqs))
+	for _, req := range reqs {
+		expectedIDs[req.ID] = struct{}{}
+	}
 	byID := make(map[int64]RPCResponse, len(resps))
 	for _, r := range resps {
+		if r.JSONRPC != "2.0" {
+			return nil, &TransportError{Op: "rpc.Batch", Err: fmt.Errorf("invalid JSON-RPC version %q for response id %d", r.JSONRPC, r.ID)}
+		}
+		if _, expected := expectedIDs[r.ID]; !expected {
+			return nil, &TransportError{Op: "rpc.Batch", Err: fmt.Errorf("unexpected JSON-RPC response id %d", r.ID)}
+		}
 		if _, exists := byID[r.ID]; exists {
 			return nil, &TransportError{Op: "rpc.Batch", Err: fmt.Errorf("duplicate response id %d", r.ID)}
+		}
+		if err := validateRPCPayload(r); err != nil {
+			return nil, &TransportError{Op: "rpc.Batch", Err: fmt.Errorf("response id %d: %w", r.ID, err)}
 		}
 		byID[r.ID] = r
 	}
@@ -174,6 +191,15 @@ func (s *RPCService) Batch(ctx context.Context, chainID int64, calls []RPCBatchC
 	return out, nil
 }
 
+func validateRPCPayload(resp RPCResponse) error {
+	hasResult := len(resp.Result) > 0
+	hasError := resp.Error != nil
+	if hasResult == hasError {
+		return errors.New("JSON-RPC response must contain exactly one of result or error")
+	}
+	return nil
+}
+
 // post sends a single JSON-RPC request and decodes the response.
 func (s *RPCService) post(ctx context.Context, chainID int64, req rpcRequest) (RPCResponse, error) {
 	body, err := json.Marshal(req)
@@ -187,15 +213,16 @@ func (s *RPCService) post(ctx context.Context, chainID int64, req rpcRequest) (R
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
 	httpReq.Header.Set("User-Agent", s.client.cfg.userAgent)
+	httpReq.Header.Set(EdgeSecretHeader, s.apiKey())
 
 	resp, err := s.client.cfg.httpClient.Do(httpReq)
 	if err != nil {
 		return RPCResponse{}, &TransportError{Op: "rpc", Err: err}
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := readResponseBody(resp.Body, s.client.cfg.maxResponseBodyBytes)
 	if err != nil {
-		return RPCResponse{}, &TransportError{Op: "rpc", Err: err}
+		return RPCResponse{}, &TransportError{Op: "rpc", StatusCode: resp.StatusCode, Err: err}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return RPCResponse{}, &ProblemDetails{
@@ -213,6 +240,9 @@ func (s *RPCService) post(ctx context.Context, chainID int64, req rpcRequest) (R
 	if out.ID != req.ID {
 		return RPCResponse{}, &TransportError{Op: "rpc", Err: fmt.Errorf("response id %d does not match request id %d", out.ID, req.ID)}
 	}
+	if out.JSONRPC != "2.0" {
+		return RPCResponse{}, &TransportError{Op: "rpc", Err: fmt.Errorf("invalid JSON-RPC version %q", out.JSONRPC)}
+	}
 	return out, nil
 }
 
@@ -229,15 +259,16 @@ func (s *RPCService) postBatch(ctx context.Context, chainID int64, reqs []rpcReq
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
 	httpReq.Header.Set("User-Agent", s.client.cfg.userAgent)
+	httpReq.Header.Set(EdgeSecretHeader, s.apiKey())
 
 	resp, err := s.client.cfg.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, &TransportError{Op: "rpc", Err: err}
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := readResponseBody(resp.Body, s.client.cfg.maxResponseBodyBytes)
 	if err != nil {
-		return nil, &TransportError{Op: "rpc", Err: err}
+		return nil, &TransportError{Op: "rpc", StatusCode: resp.StatusCode, Err: err}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, &ProblemDetails{

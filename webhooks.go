@@ -3,6 +3,8 @@ package goldsky
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -73,6 +75,22 @@ func (s *WebhookService) List(ctx context.Context) (WebhookListResponse, error) 
 // Create creates an entity webhook and returns the one-time delivery secret.
 // See https://api.goldsky.com/api/v1/docs#tag/Subgraph%20Webhooks/operation/createWebhook
 func (s *WebhookService) Create(ctx context.Context, req CreateWebhookRequest) (CreateWebhookResponse, error) {
+	if err := validateResourceName("webhook", req.Name); err != nil {
+		return CreateWebhookResponse{}, err
+	}
+	if len(req.Name) > 42 {
+		return CreateWebhookResponse{}, fmt.Errorf("goldsky: webhook name must be at most 42 characters")
+	}
+	if err := validateSubgraphTarget(req.SubgraphName, req.SubgraphVersion); err != nil {
+		return CreateWebhookResponse{}, err
+	}
+	if strings.TrimSpace(req.Entity) == "" {
+		return CreateWebhookResponse{}, fmt.Errorf("goldsky: webhook entity is required")
+	}
+	webhookURL, err := url.ParseRequestURI(req.WebhookURL)
+	if err != nil || (webhookURL.Scheme != "http" && webhookURL.Scheme != "https") || webhookURL.Host == "" {
+		return CreateWebhookResponse{}, fmt.Errorf("goldsky: webhook URL must be an absolute HTTP(S) URL")
+	}
 	if req.NumRetries != nil && (*req.NumRetries < 0 || *req.NumRetries > 10) {
 		return CreateWebhookResponse{}, fmt.Errorf("num_retries must be between 0 and 10, got %d", *req.NumRetries)
 	}
@@ -96,6 +114,9 @@ func (s *WebhookService) Create(ctx context.Context, req CreateWebhookRequest) (
 // Delete deletes a webhook by name. See
 // https://api.goldsky.com/api/v1/docs#tag/Subgraph%20Webhooks/operation/deleteWebhook
 func (s *WebhookService) Delete(ctx context.Context, name string) error {
+	if err := validateResourceName("webhook", name); err != nil {
+		return err
+	}
 	_, err := s.client.do(ctx, "DELETE", []string{"subgraphs", "webhooks", name}, requestOptions{})
 	return err
 }

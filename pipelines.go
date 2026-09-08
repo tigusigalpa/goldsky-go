@@ -436,12 +436,16 @@ func (s *PipelineService) State(ctx context.Context, name string) (PipelineState
 	if err != nil {
 		return PipelineStateResponse{}, err
 	}
-	var out PipelineStateResponse
-	if err := decodeJSON(resp.body, &out); err != nil {
-		// The state body may not be wrapped in {data:...}; fall back to raw.
-		if len(resp.body) > 0 {
-			out.Data = resp.body
-		}
+	var raw json.RawMessage
+	if err := decodeJSON(resp.body, &raw); err != nil {
+		return PipelineStateResponse{}, &TransportError{Op: "getPipelineState", StatusCode: resp.statusCode, Err: err}
+	}
+	out := PipelineStateResponse{Data: append(json.RawMessage(nil), raw...)}
+	var envelope struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if len(raw) > 0 && raw[0] == '{' && json.Unmarshal(raw, &envelope) == nil && len(envelope.Data) > 0 {
+		out.Data = envelope.Data
 	}
 	return out, nil
 }

@@ -3,6 +3,7 @@ package goldsky
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"strconv"
 	"time"
@@ -90,6 +91,27 @@ type CreateEdgeEndpointResponse struct {
 type UpdateEdgeEndpointRequest struct {
 	RateLimitBudget *EdgeRateLimitBudget `json:"rate_limit_budget,omitempty"`
 	AllowedDomains  []string             `json:"allowed_domains,omitempty"`
+	// ClearRateLimitBudget sends an explicit JSON null. It is mutually
+	// exclusive with RateLimitBudget.
+	ClearRateLimitBudget bool `json:"-"`
+}
+
+// MarshalJSON preserves a non-nil empty AllowedDomains slice so callers can
+// clear the allowlist, and supports the API's explicit null budget reset.
+func (r UpdateEdgeEndpointRequest) MarshalJSON() ([]byte, error) {
+	if r.RateLimitBudget != nil && r.ClearRateLimitBudget {
+		return nil, fmt.Errorf("goldsky: RateLimitBudget and ClearRateLimitBudget are mutually exclusive")
+	}
+	payload := make(map[string]any, 2)
+	if r.RateLimitBudget != nil {
+		payload["rate_limit_budget"] = r.RateLimitBudget
+	} else if r.ClearRateLimitBudget {
+		payload["rate_limit_budget"] = nil
+	}
+	if r.AllowedDomains != nil {
+		payload["allowed_domains"] = r.AllowedDomains
+	}
+	return json.Marshal(payload)
 }
 
 // EdgeNetwork is a supported Edge network.
@@ -201,6 +223,12 @@ func (p *EdgePager) NextPage(ctx context.Context) (Page[EdgeEndpoint], error) {
 // Create creates an Edge endpoint and returns the one-time API key. See
 // https://api.goldsky.com/api/v1/docs#tag/Edge%20Endpoints/operation/createEdgeEndpoint
 func (s *EdgeService) Create(ctx context.Context, req CreateEdgeEndpointRequest) (CreateEdgeEndpointResponse, error) {
+	if err := validateResourceName("Edge endpoint", req.Name); err != nil {
+		return CreateEdgeEndpointResponse{}, err
+	}
+	if req.Product != nil && *req.Product != EdgeProductRPC && *req.Product != EdgeProductData {
+		return CreateEdgeEndpointResponse{}, fmt.Errorf("goldsky: Edge endpoint product must be %q or %q, got %q", EdgeProductRPC, EdgeProductData, *req.Product)
+	}
 	resp, err := s.client.do(ctx, "POST", []string{"edge"}, requestOptions{jsonBody: req})
 	if err != nil {
 		return CreateEdgeEndpointResponse{}, err
@@ -215,6 +243,9 @@ func (s *EdgeService) Create(ctx context.Context, req CreateEdgeEndpointRequest)
 // Get fetches an Edge endpoint. See
 // https://api.goldsky.com/api/v1/docs#tag/Edge%20Endpoints/operation/getEdgeEndpoint
 func (s *EdgeService) Get(ctx context.Context, name string) (EdgeEndpoint, error) {
+	if err := validateResourceName("Edge endpoint", name); err != nil {
+		return EdgeEndpoint{}, err
+	}
 	resp, err := s.client.do(ctx, "GET", []string{"edge", name}, requestOptions{})
 	if err != nil {
 		return EdgeEndpoint{}, err
@@ -231,6 +262,15 @@ func (s *EdgeService) Get(ctx context.Context, name string) (EdgeEndpoint, error
 // Update updates an Edge endpoint. See
 // https://api.goldsky.com/api/v1/docs#tag/Edge%20Endpoints/operation/updateEdgeEndpoint
 func (s *EdgeService) Update(ctx context.Context, name string, req UpdateEdgeEndpointRequest) (EdgeEndpoint, error) {
+	if err := validateResourceName("Edge endpoint", name); err != nil {
+		return EdgeEndpoint{}, err
+	}
+	if req.RateLimitBudget == nil && !req.ClearRateLimitBudget && req.AllowedDomains == nil {
+		return EdgeEndpoint{}, fmt.Errorf("goldsky: Edge endpoint update requires at least one change")
+	}
+	if req.RateLimitBudget != nil && req.ClearRateLimitBudget {
+		return EdgeEndpoint{}, fmt.Errorf("goldsky: RateLimitBudget and ClearRateLimitBudget are mutually exclusive")
+	}
 	resp, err := s.client.do(ctx, "PATCH", []string{"edge", name}, requestOptions{jsonBody: req})
 	if err != nil {
 		return EdgeEndpoint{}, err
@@ -247,6 +287,9 @@ func (s *EdgeService) Update(ctx context.Context, name string, req UpdateEdgeEnd
 // Delete deletes an Edge endpoint. Returns nil on 204. See
 // https://api.goldsky.com/api/v1/docs#tag/Edge%20Endpoints/operation/deleteEdgeEndpoint
 func (s *EdgeService) Delete(ctx context.Context, name string) error {
+	if err := validateResourceName("Edge endpoint", name); err != nil {
+		return err
+	}
 	_, err := s.client.do(ctx, "DELETE", []string{"edge", name}, requestOptions{})
 	return err
 }
@@ -254,6 +297,9 @@ func (s *EdgeService) Delete(ctx context.Context, name string) error {
 // Pause pauses an Edge endpoint. See
 // https://api.goldsky.com/api/v1/docs#tag/Edge%20Lifecycle/operation/pauseEdgeEndpoint
 func (s *EdgeService) Pause(ctx context.Context, name string) (EdgeEndpoint, error) {
+	if err := validateResourceName("Edge endpoint", name); err != nil {
+		return EdgeEndpoint{}, err
+	}
 	resp, err := s.client.do(ctx, "PUT", []string{"edge", name, "pause"}, requestOptions{})
 	if err != nil {
 		return EdgeEndpoint{}, err
@@ -270,6 +316,9 @@ func (s *EdgeService) Pause(ctx context.Context, name string) (EdgeEndpoint, err
 // Resume resumes a paused Edge endpoint. See
 // https://api.goldsky.com/api/v1/docs#tag/Edge%20Lifecycle/operation/resumeEdgeEndpoint
 func (s *EdgeService) Resume(ctx context.Context, name string) (EdgeEndpoint, error) {
+	if err := validateResourceName("Edge endpoint", name); err != nil {
+		return EdgeEndpoint{}, err
+	}
 	resp, err := s.client.do(ctx, "PUT", []string{"edge", name, "resume"}, requestOptions{})
 	if err != nil {
 		return EdgeEndpoint{}, err
@@ -287,6 +336,9 @@ func (s *EdgeService) Resume(ctx context.Context, name string) (EdgeEndpoint, er
 // from the REST project token and is never logged. See
 // https://api.goldsky.com/api/v1/docs#tag/Edge%20API%20Keys/operation/revealEdgeEndpointKey
 func (s *EdgeService) RevealKey(ctx context.Context, name string) (RevealEdgeKeyResponse, error) {
+	if err := validateResourceName("Edge endpoint", name); err != nil {
+		return RevealEdgeKeyResponse{}, err
+	}
 	resp, err := s.client.do(ctx, "GET", []string{"edge", name, "api-key"}, requestOptions{})
 	if err != nil {
 		return RevealEdgeKeyResponse{}, err
@@ -301,6 +353,12 @@ func (s *EdgeService) RevealKey(ctx context.Context, name string) (RevealEdgeKey
 // Metrics fetches Edge endpoint metrics. See
 // https://api.goldsky.com/api/v1/docs#tag/Edge%20Metrics/operation/getEdgeEndpointMetrics
 func (s *EdgeService) Metrics(ctx context.Context, name string, opts EdgeMetricsOptions) (EdgeMetricsResponse, error) {
+	if err := validateResourceName("Edge endpoint", name); err != nil {
+		return EdgeMetricsResponse{}, err
+	}
+	if !opts.From.IsZero() && !opts.To.IsZero() && opts.From.After(opts.To) {
+		return EdgeMetricsResponse{}, fmt.Errorf("goldsky: metrics From must not be after To")
+	}
 	q := make(url.Values)
 	if !opts.From.IsZero() {
 		q.Set("from", opts.From.Format(time.RFC3339))

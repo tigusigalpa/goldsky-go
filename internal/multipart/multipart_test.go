@@ -24,6 +24,16 @@ type failingReader struct{}
 
 func (failingReader) Read([]byte) (int, error) { return 0, errors.New("read failed") }
 
+type failingReadCloser struct {
+	closed atomic.Bool
+}
+
+func (r *failingReadCloser) Read([]byte) (int, error) { return 0, errors.New("read failed") }
+func (r *failingReadCloser) Close() error {
+	r.closed.Store(true)
+	return nil
+}
+
 func TestNewBodyStreamsFieldsAndFile(t *testing.T) {
 	fileReader := &trackingReader{Reader: bytes.NewReader([]byte("zip-data"))}
 	body, err := NewBody([]Field{{Name: "description", Value: "hello"}}, File{
@@ -93,5 +103,21 @@ func TestNewBodyPropagatesReaderFailure(t *testing.T) {
 	defer func() { _ = body.Close() }()
 	if _, err := io.ReadAll(body); err == nil || !strings.Contains(err.Error(), "read failed") {
 		t.Fatalf("ReadAll error = %v", err)
+	}
+}
+
+func TestNewBodyClosesFileReaderAfterCopyError(t *testing.T) {
+	file := &failingReadCloser{}
+	body, err := NewBody(nil, File{FieldName: "bundle", Filename: "build.zip", Reader: file})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = body.Close() }()
+
+	if _, err := io.ReadAll(body); err == nil {
+		t.Fatal("expected multipart copy error")
+	}
+	if !file.closed.Load() {
+		t.Fatal("file reader was not closed")
 	}
 }

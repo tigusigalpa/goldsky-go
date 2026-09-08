@@ -26,7 +26,7 @@ func main() {
 	}
 	versionOrTag := os.Getenv("GOLDSKY_SUBGRAPH_VERSION")
 	if versionOrTag == "" {
-		versionOrTag = "current"
+		log.Fatal("GOLDSKY_SUBGRAPH_VERSION is not set; provide a deployed version or stable tag such as prod")
 	}
 
 	client, err := goldsky.NewClient(apiKey)

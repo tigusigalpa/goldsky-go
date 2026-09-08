@@ -97,10 +97,10 @@ func TestPagerRejectsInvalidPageSize(t *testing.T) {
 // TestURLEncoding verifies path segments with special characters are encoded.
 func TestURLEncoding(t *testing.T) {
 	ts := newTestServer(t)
-	ts.setJSON(200, map[string]any{"data": []any{}, "pagination": map[string]any{"next_page_token": nil, "page_size": 0}})
+	ts.setJSON(200, map[string]any{"data": map[string]any{"name": "my endpoint/primary"}})
 	c := newTestClient(t, ts)
 	// A name with a space must be percent-encoded in the path.
-	if _, err := c.Subgraphs.Get(context.Background(), "my sub/graph"); err != nil {
+	if _, err := c.Edge.Get(context.Background(), "my endpoint/primary"); err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	req := ts.lastRequest()
@@ -301,6 +301,51 @@ func TestTrailingJSONIsRejected(t *testing.T) {
 	}
 }
 
+func TestPipelineStateAcceptsWrappedAndRawJSON(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "wrapped", body: `{"data":{"cursor":42}}`, want: `{"cursor":42}`},
+		{name: "raw", body: `{"cursor":42}`, want: `{"cursor":42}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := newTestServer(t)
+			ts.setResponse(http.StatusOK, []byte(tc.body))
+			c := newTestClient(t, ts)
+			state, err := c.Pipelines.State(context.Background(), "my-pipeline")
+			if err != nil {
+				t.Fatalf("State: %v", err)
+			}
+			if got := string(state.Data); got != tc.want {
+				t.Fatalf("state = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEmptyJSONResponseIsRejected(t *testing.T) {
+	ts := newTestServer(t)
+	ts.setResponse(http.StatusOK, nil)
+	c := newTestClient(t, ts)
+	_, err := c.Pipelines.List(context.Background(), ListPipelinesOptions{})
+	if AsTransport(err) == nil {
+		t.Fatalf("expected TransportError, got %T: %v", err, err)
+	}
+}
+
+func TestResponseBodyLimit(t *testing.T) {
+	ts := newTestServer(t)
+	ts.setResponse(http.StatusOK, []byte(`{"data":[],"pagination":{}}`))
+	c := newTestClient(t, ts, WithMaxResponseBodyBytes(8))
+	_, err := c.Pipelines.List(context.Background(), ListPipelinesOptions{})
+	transportErr := AsTransport(err)
+	if transportErr == nil || !strings.Contains(transportErr.Error(), "response body exceeds") {
+		t.Fatalf("expected response-size TransportError, got %T: %v", err, err)
+	}
+}
+
 // TestContextCancellation verifies a cancelled context aborts the request.
 func TestContextCancellation(t *testing.T) {
 	ts := newTestServer(t)
@@ -396,6 +441,36 @@ func TestEdge204Deletion(t *testing.T) {
 	}
 }
 
+func TestEdgeUpdateCanClearOptionalSettings(t *testing.T) {
+	ts := newTestServer(t)
+	ts.setJSON(http.StatusOK, map[string]any{"data": map[string]any{"name": "ep", "product": "rpc", "status": "ACTIVE"}})
+	c := newTestClient(t, ts)
+	_, err := c.Edge.Update(context.Background(), "ep", UpdateEdgeEndpointRequest{
+		AllowedDomains:       []string{},
+		ClearRateLimitBudget: true,
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	body := string(ts.lastRequest().Body)
+	if !strings.Contains(body, `"allowed_domains":[]`) || !strings.Contains(body, `"rate_limit_budget":null`) {
+		t.Fatalf("request body = %s, want explicit empty domains and null budget", body)
+	}
+}
+
+func TestEdgeCreateRejectsUnsupportedProduct(t *testing.T) {
+	ts := newTestServer(t)
+	c := newTestClient(t, ts)
+	product := EdgeProductBoost
+	_, err := c.Edge.Create(context.Background(), CreateEdgeEndpointRequest{Name: "ep", Product: &product})
+	if err == nil {
+		t.Fatal("expected unsupported product error")
+	}
+	if got := ts.requestCount(); got != 0 {
+		t.Fatalf("request count = %d, want 0", got)
+	}
+}
+
 // TestWebhookVerifier verifies constant-time comparison and edge cases.
 func TestWebhookVerifier(t *testing.T) {
 	if !VerifyWebhookSecret("s", "s") {
@@ -456,8 +531,11 @@ func TestGraphQLNonJSONHTTPError(t *testing.T) {
 // TestEdgeRPCSingle verifies a single JSON-RPC call decodes the result.
 func TestEdgeRPCSingle(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.URL.String(), "key=edge-key") {
-			t.Errorf("url missing key: %s", redactURL(r.URL.String()))
+		if got := r.Header.Get(EdgeSecretHeader); got != "edge-key" {
+			t.Errorf("%s = %q, want edge-key", EdgeSecretHeader, got)
+		}
+		if r.URL.RawQuery != "" {
+			t.Errorf("Edge key leaked into query string: %s", redactURL(r.URL.String()))
 		}
 		body, _ := io.ReadAll(r.Body)
 		var req rpcRequest
@@ -553,8 +631,32 @@ func TestNetworkTimeout(t *testing.T) {
 
 // TestNewClientRequiresToken verifies a token is required.
 func TestNewClientRequiresToken(t *testing.T) {
-	if _, err := NewClient(""); err == nil {
+	if _, err := NewClient(""); !errors.Is(err, ErrAPITokenRequired) {
 		t.Fatal("expected error for empty token")
+	}
+}
+
+func TestNewDataClientDoesNotRequireRESTToken(t *testing.T) {
+	ts := newTestServer(t)
+	ts.setResponse(http.StatusOK, []byte(`{"data":{"ok":true}}`))
+	c, err := NewDataClient(WithBaseURL(ts.URL))
+	if err != nil {
+		t.Fatalf("NewDataClient: %v", err)
+	}
+	c.GraphQL.baseURL = ts.URL
+	if _, err := c.GraphQL.QueryPublic(context.Background(), "project", "subgraph", "v1", GraphQLRequest{Query: "{ ok }"}); err != nil {
+		t.Fatalf("QueryPublic: %v", err)
+	}
+	_, err = c.Pipelines.List(context.Background(), ListPipelinesOptions{})
+	if !errors.Is(err, ErrAPITokenRequired) {
+		t.Fatalf("REST error = %v, want ErrAPITokenRequired", err)
+	}
+	_, err = c.GraphQL.QueryPrivate(context.Background(), "project", "subgraph", "v1", GraphQLRequest{Query: "{ ok }"})
+	if !errors.Is(err, ErrAPITokenRequired) {
+		t.Fatalf("private GraphQL error = %v, want ErrAPITokenRequired", err)
+	}
+	if got := ts.requestCount(); got != 1 {
+		t.Fatalf("request count = %d, want only the public GraphQL request", got)
 	}
 }
 
@@ -578,6 +680,7 @@ func TestNewClientRejectsInvalidConfiguration(t *testing.T) {
 		{WithBaseURL("not a URL")},
 		{WithRetryMaxAttempts(-1)},
 		{WithTimeout(-time.Second)},
+		{WithMaxResponseBodyBytes(0)},
 	} {
 		if _, err := NewClient("token", opts...); err == nil {
 			t.Fatalf("expected error for options %#v", opts)
@@ -606,12 +709,25 @@ func TestGraphQLURLsEscapePathSegments(t *testing.T) {
 	}
 }
 
-// TestEdgeEndpointURL verifies the Edge RPC URL includes the chain ID and key.
+// TestEdgeEndpointURL verifies the Edge RPC URL includes the chain ID but not the secret.
 func TestEdgeEndpointURL(t *testing.T) {
 	c := newTestClient(t, newTestServer(t), WithEdgeAPIKey("ek"))
 	u := c.RPC.EndpointURL(137)
-	if !strings.Contains(u, "/evm/137?") || !strings.Contains(u, "key=ek") {
+	if !strings.HasSuffix(u, "/evm/137") || strings.Contains(u, "ek") || strings.Contains(u, "?") {
 		t.Errorf("endpoint url = %q", u)
+	}
+}
+
+func TestEdgeRPCRejectsMismatchedResponseID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":999,"result":"0x1"}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := newTestClient(t, newTestServer(t), WithEdgeAPIKey("edge-key"))
+	c.RPC.baseURL = srv.URL
+	if err := c.RPC.Call(context.Background(), 1, "eth_chainId", nil, nil); err == nil {
+		t.Fatal("expected mismatched response ID error")
 	}
 }
 

@@ -195,6 +195,9 @@ func (p *SubgraphPager) NextPage(ctx context.Context) (Page[Subgraph], error) {
 // Get fetches a subgraph with its versions and tags. See
 // https://api.goldsky.com/api/v1/docs#tag/Subgraphs/operation/getSubgraph
 func (s *SubgraphService) Get(ctx context.Context, name string) (Page[Subgraph], error) {
+	if err := validateSubgraphTarget(name, ""); err != nil {
+		return Page[Subgraph]{}, err
+	}
 	resp, err := s.client.do(ctx, "GET", []string{"subgraphs", name}, requestOptions{})
 	if err != nil {
 		return Page[Subgraph]{}, err
@@ -224,6 +227,9 @@ func (s *SubgraphService) SupportedChains(ctx context.Context) (SubgraphChainsRe
 // GetVersion fetches a subgraph tag or deployed version. See
 // https://api.goldsky.com/api/v1/docs#tag/Subgraphs/operation/getSubgraphVersion
 func (s *SubgraphService) GetVersion(ctx context.Context, name, version string) (Page[Subgraph], error) {
+	if err := validateSubgraphTarget(name, version); err != nil {
+		return Page[Subgraph]{}, err
+	}
 	resp, err := s.client.do(ctx, "GET", []string{"subgraphs", name, version}, requestOptions{})
 	if err != nil {
 		return Page[Subgraph]{}, err
@@ -238,6 +244,9 @@ func (s *SubgraphService) GetVersion(ctx context.Context, name, version string) 
 // UpdateVersion updates endpoint settings on a version or tag. See
 // https://api.goldsky.com/api/v1/docs#tag/Subgraph%20Lifecycle/operation/updateSubgraphVersion
 func (s *SubgraphService) UpdateVersion(ctx context.Context, name, version string, req UpdateSubgraphVersionRequest) (Subgraph, error) {
+	if err := validateSubgraphTarget(name, version); err != nil {
+		return Subgraph{}, err
+	}
 	resp, err := s.client.do(ctx, "PATCH", []string{"subgraphs", name, version}, requestOptions{jsonBody: req})
 	if err != nil {
 		return Subgraph{}, err
@@ -254,6 +263,9 @@ func (s *SubgraphService) UpdateVersion(ctx context.Context, name, version strin
 // Logs fetches a page of subgraph indexing logs. See
 // https://api.goldsky.com/api/v1/docs#tag/Subgraph%20Logs/operation/getSubgraphLogs
 func (s *SubgraphService) Logs(ctx context.Context, name, version string, opts SubgraphLogsOptions) (SubgraphLogsResponse, error) {
+	if err := validateSubgraphTarget(name, version); err != nil {
+		return SubgraphLogsResponse{}, err
+	}
 	q := make(url.Values)
 	if opts.Cursor != nil {
 		q.Set("cursor", strconv.FormatFloat(*opts.Cursor, 'f', -1, 64))
@@ -288,6 +300,9 @@ func (s *SubgraphService) Logs(ctx context.Context, name, version string, opts S
 // version, not a moving tag. See
 // https://api.goldsky.com/api/v1/docs#tag/Subgraph%20Lifecycle/operation/pauseSubgraph
 func (s *SubgraphService) Pause(ctx context.Context, name, version string) error {
+	if err := validateSubgraphTarget(name, version); err != nil {
+		return err
+	}
 	_, err := s.client.do(ctx, "PUT", []string{"subgraphs", name, version, "pause"}, requestOptions{})
 	return err
 }
@@ -295,6 +310,9 @@ func (s *SubgraphService) Pause(ctx context.Context, name, version string) error
 // Resume resumes a paused deployed subgraph version. See
 // https://api.goldsky.com/api/v1/docs#tag/Subgraph%20Lifecycle/operation/resumeSubgraph
 func (s *SubgraphService) Resume(ctx context.Context, name, version string) error {
+	if err := validateSubgraphTarget(name, version); err != nil {
+		return err
+	}
 	_, err := s.client.do(ctx, "PUT", []string{"subgraphs", name, version, "resume"}, requestOptions{})
 	return err
 }
@@ -302,6 +320,12 @@ func (s *SubgraphService) Resume(ctx context.Context, name, version string) erro
 // SetTag creates or moves a tag to a target version. See
 // https://api.goldsky.com/api/v1/docs#tag/Subgraph%20Tags/operation/setSubgraphTag
 func (s *SubgraphService) SetTag(ctx context.Context, name, version string, req SetSubgraphTagRequest) (Subgraph, error) {
+	if err := validateSubgraphTarget(name, version); err != nil {
+		return Subgraph{}, err
+	}
+	if !subgraphVersionRe.MatchString(req.TargetVersion) {
+		return Subgraph{}, fmt.Errorf("invalid target subgraph version %q", req.TargetVersion)
+	}
 	resp, err := s.client.do(ctx, "PUT", []string{"subgraphs", name, "tags", version}, requestOptions{jsonBody: req})
 	if err != nil {
 		return Subgraph{}, err
@@ -318,6 +342,9 @@ func (s *SubgraphService) SetTag(ctx context.Context, name, version string, req 
 // DeleteTag deletes a tag. See
 // https://api.goldsky.com/api/v1/docs#tag/Subgraph%20Tags/operation/deleteSubgraphTag
 func (s *SubgraphService) DeleteTag(ctx context.Context, name, version string) error {
+	if err := validateSubgraphTarget(name, version); err != nil {
+		return err
+	}
 	_, err := s.client.do(ctx, "DELETE", []string{"subgraphs", name, "tags", version}, requestOptions{})
 	return err
 }
@@ -326,6 +353,9 @@ func (s *SubgraphService) DeleteTag(ctx context.Context, name, version string) e
 // deployment is referenced by a tag, pipeline, or webhook. See
 // https://api.goldsky.com/api/v1/docs#tag/Subgraph%20Deployments/operation/deleteSubgraphDeployment
 func (s *SubgraphService) DeleteDeployment(ctx context.Context, name, version string) error {
+	if err := validateSubgraphTarget(name, version); err != nil {
+		return err
+	}
 	_, err := s.client.do(ctx, "DELETE", []string{"subgraphs", name, "deployments", version}, requestOptions{})
 	return err
 }
@@ -333,6 +363,9 @@ func (s *SubgraphService) DeleteDeployment(ctx context.Context, name, version st
 // Deploy deploys a compiled subgraph bundle as streaming multipart/form-data.
 // See https://api.goldsky.com/api/v1/docs#tag/Subgraph%20Deployments/operation/deploySubgraph
 func (s *SubgraphService) Deploy(ctx context.Context, name, version string, opts DeploySubgraphOptions) (Subgraph, error) {
+	if err := validateSubgraphTarget(name, version); err != nil {
+		return Subgraph{}, err
+	}
 	if opts.Bundle == nil {
 		return Subgraph{}, fmt.Errorf("goldsky: Deploy requires a Bundle reader")
 	}
@@ -411,6 +444,9 @@ type WebhookEntitiesResponse struct {
 // WebhookEntities lists webhook-able entities for a subgraph version. See
 // https://api.goldsky.com/api/v1/docs#tag/Subgraph%20Webhooks/operation/listWebhookEntities
 func (s *SubgraphService) WebhookEntities(ctx context.Context, name, version string) (WebhookEntitiesResponse, error) {
+	if err := validateSubgraphTarget(name, version); err != nil {
+		return WebhookEntitiesResponse{}, err
+	}
 	resp, err := s.client.do(ctx, "GET", []string{"subgraphs", name, version, "entities"}, requestOptions{})
 	if err != nil {
 		return WebhookEntitiesResponse{}, err

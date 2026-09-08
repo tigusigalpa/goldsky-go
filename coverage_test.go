@@ -109,7 +109,7 @@ func TestClientOptionsAndUtilities(t *testing.T) {
 	if c.BaseURL() != ts.URL+"/api" || c.UserAgent() != "coverage-test" {
 		t.Fatalf("client configuration = %q, %q", c.BaseURL(), c.UserAgent())
 	}
-	if got := c.RPC.EndpointURL(1); !strings.HasPrefix(got, ts.URL+"/rpc/1?") {
+	if got := c.RPC.EndpointURL(1); got != ts.URL+"/rpc/1" {
 		t.Fatalf("RPC URL = %q", got)
 	}
 
@@ -191,7 +191,7 @@ func TestServiceDecodeFailuresAreTransportErrors(t *testing.T) {
 		}},
 		{"edge get", func(c *Client) error { _, err := c.Edge.Get(context.Background(), "edge"); return err }},
 		{"edge update", func(c *Client) error {
-			_, err := c.Edge.Update(context.Background(), "edge", UpdateEdgeEndpointRequest{})
+			_, err := c.Edge.Update(context.Background(), "edge", UpdateEdgeEndpointRequest{AllowedDomains: []string{"example.com"}})
 			return err
 		}},
 		{"edge pause", func(c *Client) error { _, err := c.Edge.Pause(context.Background(), "edge"); return err }},
@@ -203,7 +203,10 @@ func TestServiceDecodeFailuresAreTransportErrors(t *testing.T) {
 		}},
 		{"webhook list", func(c *Client) error { _, err := c.Webhooks.List(context.Background()); return err }},
 		{"webhook create", func(c *Client) error {
-			_, err := c.Webhooks.Create(context.Background(), CreateWebhookRequest{})
+			_, err := c.Webhooks.Create(context.Background(), CreateWebhookRequest{
+				Name: "hook", SubgraphName: "subgraph", SubgraphVersion: "v1",
+				Entity: "Transfer", WebhookURL: "https://example.com/hook",
+			})
 			return err
 		}},
 	}

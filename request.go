@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -36,8 +37,14 @@ type requestOptions struct {
 // path segments are URL-encoded individually and joined with "/". The REST
 // project token is sent as a Bearer header and never appears in errors or logs.
 func (c *Client) do(ctx context.Context, method string, segments []string, opts requestOptions) (*apiResponse, error) {
+	if ctx == nil {
+		return nil, &TransportError{Op: method, Err: errors.New("nil context")}
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, &TransportError{Op: method, Err: err}
+	}
+	if c.apiToken == "" {
+		return nil, ErrAPITokenRequired
 	}
 
 	attempts := c.cfg.retry.MaxAttempts
@@ -68,10 +75,10 @@ func (c *Client) do(ctx context.Context, method string, segments []string, opts 
 			return nil, lastErr
 		}
 
-		body, readErr := io.ReadAll(resp.Body)
+		body, readErr := readResponseBody(resp.Body, c.cfg.maxResponseBodyBytes)
 		_ = resp.Body.Close()
 		if readErr != nil {
-			lastErr = &TransportError{Op: method, Err: readErr}
+			lastErr = &TransportError{Op: method, StatusCode: resp.StatusCode, Err: readErr}
 			if (safe || retryMutations) && opts.multipart == nil && attempt < attempts {
 				d := c.backoff(attempt, nil)
 				c.logRetry(method, attempt, attempts, d)
@@ -248,10 +255,11 @@ func parseProblem(resp *http.Response, body []byte) *ProblemDetails {
 	return p
 }
 
-// decodeJSON decodes body into target, treating an empty body as a no-op.
+// decodeJSON decodes exactly one JSON value into target. Empty bodies and
+// trailing values are rejected.
 func decodeJSON(body []byte, target interface{}) error {
 	if len(body) == 0 {
-		return nil
+		return io.ErrUnexpectedEOF
 	}
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.UseNumber()
@@ -265,4 +273,20 @@ func decodeJSON(body []byte, target interface{}) error {
 		return fmt.Errorf("unexpected trailing data: %w", err)
 	}
 	return nil
+}
+
+func readResponseBody(r io.Reader, limit int64) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, limit))
+	if err != nil {
+		return nil, err
+	}
+	var extra [1]byte
+	n, err := r.Read(extra[:])
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	if n > 0 {
+		return nil, fmt.Errorf("response body exceeds %d-byte limit", limit)
+	}
+	return body, nil
 }

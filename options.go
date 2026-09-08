@@ -13,13 +13,17 @@ import (
 const DefaultBaseURL = "https://api.goldsky.com/api/v1"
 
 // DefaultUserAgent is the default User-Agent header for REST requests.
-const DefaultUserAgent = "goldsky-go/1.0.0"
+const DefaultUserAgent = "goldsky-go/1.1.2"
 
 // DefaultEdgeBaseURL is the Goldsky Edge RPC HTTPS JSON-RPC base URL.
 const DefaultEdgeBaseURL = "https://edge.goldsky.com/standard/evm"
 
 // DefaultGraphQLBaseURL is the Goldsky Subgraph GraphQL data-plane base URL.
 const DefaultGraphQLBaseURL = "https://api.goldsky.com/api"
+
+// DefaultMaxResponseBodyBytes is the largest REST, GraphQL, or JSON-RPC
+// response body read into memory by default.
+const DefaultMaxResponseBodyBytes int64 = 16 << 20 // 16 MiB
 
 // RetryPolicy controls automatic retry of failed requests.
 //
@@ -53,16 +57,17 @@ func DefaultRetryPolicy() RetryPolicy {
 
 // config holds resolved client configuration after applying options.
 type config struct {
-	baseURL     string
-	userAgent   string
-	httpClient  *http.Client
-	httpTimeout *time.Duration
-	retry       RetryPolicy
-	logger      *log.Logger
-	clock       Clock
-	sleeper     Sleeper
-	edgeAPIKey  string
-	edgeBaseURL string
+	baseURL              string
+	userAgent            string
+	httpClient           *http.Client
+	httpTimeout          *time.Duration
+	retry                RetryPolicy
+	logger               *log.Logger
+	clock                Clock
+	sleeper              Sleeper
+	edgeAPIKey           string
+	edgeBaseURL          string
+	maxResponseBodyBytes int64
 }
 
 // Option configures a Client.
@@ -149,14 +154,22 @@ func WithEdgeBaseURL(url string) Option {
 	return func(c *config) { c.edgeBaseURL = url }
 }
 
+// WithMaxResponseBodyBytes limits how much response data the client buffers.
+// The limit applies to REST, GraphQL, and Edge RPC responses. Values must be
+// positive. The default is 16 MiB.
+func WithMaxResponseBodyBytes(n int64) Option {
+	return func(c *config) { c.maxResponseBodyBytes = n }
+}
+
 func defaultConfig() config {
 	return config{
-		baseURL:     DefaultBaseURL,
-		userAgent:   DefaultUserAgent,
-		retry:       DefaultRetryPolicy(),
-		logger:      log.New(ioDiscard(), "goldsky: ", 0),
-		clock:       clock.SystemClock{},
-		sleeper:     clock.SystemSleeper{},
-		edgeBaseURL: DefaultEdgeBaseURL,
+		baseURL:              DefaultBaseURL,
+		userAgent:            DefaultUserAgent,
+		retry:                DefaultRetryPolicy(),
+		logger:               log.New(ioDiscard(), "goldsky: ", 0),
+		clock:                clock.SystemClock{},
+		sleeper:              clock.SystemSleeper{},
+		edgeBaseURL:          DefaultEdgeBaseURL,
+		maxResponseBodyBytes: DefaultMaxResponseBodyBytes,
 	}
 }

@@ -31,7 +31,7 @@ func main() {
 	defer cancel()
 	name := os.Getenv("GOLDSKY_PIPELINE_NAME")
 	if name == "" {
-		name = "ethereum-blocks-example"
+		log.Fatal("GOLDSKY_PIPELINE_NAME is not set; choose a new lowercase name for the pipeline")
 	}
 
 	p, err := client.Pipelines.Create(ctx, goldsky.CreatePipelineRequest{
@@ -40,10 +40,10 @@ func main() {
 		Description:  "Example pipeline created with goldsky-go",
 		Definition: goldsky.PipelineDefinition{
 			Sources: map[string]any{
-				"ethereum_blocks": map[string]any{
+				"base_transfers": map[string]any{
 					"type":         "dataset",
-					"dataset_name": "ethereum.raw_blocks",
-					"version":      "1.0.0",
+					"dataset_name": "base.erc20_transfers",
+					"version":      "1.2.0",
 					"start_at":     "latest",
 				},
 			},
@@ -51,7 +51,7 @@ func main() {
 			Sinks: map[string]any{
 				"discard": map[string]any{
 					"type": "blackhole",
-					"from": "ethereum_blocks",
+					"from": "base_transfers",
 				},
 			},
 		},

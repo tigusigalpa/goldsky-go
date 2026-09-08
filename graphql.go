@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,7 +18,7 @@ type GraphQLRequest struct {
 	OperationName string         `json:"operationName,omitempty"`
 }
 
-// GraphQLError is a single GraphQL error. Message is the stable field; the
+// GraphQLError is a single GraphQL error. Message is human-readable; the
 // complete error object is retained in Raw for forward compatibility.
 type GraphQLError struct {
 	Message string          `json:"message"`
@@ -89,6 +89,15 @@ func (s *GraphQLService) endpointURL(scope, projectID, subgraphName, versionOrTa
 // responsible for using PublicURL or PrivateURL. When auth is true, the project
 // Bearer token is sent; the token is never logged.
 func (s *GraphQLService) Query(ctx context.Context, endpoint string, req GraphQLRequest, auth bool) (GraphQLResponse, error) {
+	if ctx == nil {
+		return GraphQLResponse{}, &TransportError{Op: "graphql", Err: errors.New("nil context")}
+	}
+	if auth && s.client.apiToken == "" {
+		return GraphQLResponse{}, ErrAPITokenRequired
+	}
+	if strings.TrimSpace(req.Query) == "" {
+		return GraphQLResponse{}, errors.New("goldsky graphql: query is required")
+	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return GraphQLResponse{}, &TransportError{Op: "graphql", Err: err}
@@ -109,9 +118,9 @@ func (s *GraphQLService) Query(ctx context.Context, endpoint string, req GraphQL
 		return GraphQLResponse{}, &TransportError{Op: "graphql", Err: err}
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := readResponseBody(resp.Body, s.client.cfg.maxResponseBodyBytes)
 	if err != nil {
-		return GraphQLResponse{}, &TransportError{Op: "graphql", Err: err}
+		return GraphQLResponse{}, &TransportError{Op: "graphql", StatusCode: resp.StatusCode, Err: err}
 	}
 	out := GraphQLResponse{Status: resp.StatusCode, Header: resp.Header.Clone()}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -128,21 +137,44 @@ func (s *GraphQLService) Query(ctx context.Context, endpoint string, req GraphQL
 			Detail:  "GraphQL endpoint returned non-2xx status",
 		}
 	}
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &out); err != nil {
-			return out, &TransportError{Op: "graphql", Err: fmt.Errorf("decode graphql response: %w", err)}
-		}
+	if len(raw) == 0 {
+		return out, &TransportError{Op: "graphql", StatusCode: resp.StatusCode, Err: errors.New("empty GraphQL response body")}
+	}
+	if err := decodeJSON(raw, &out); err != nil {
+		return out, &TransportError{Op: "graphql", StatusCode: resp.StatusCode, Err: fmt.Errorf("decode graphql response: %w", err)}
 	}
 	return out, nil
 }
 
 // QueryPublic queries a public Subgraph GraphQL endpoint.
 func (s *GraphQLService) QueryPublic(ctx context.Context, projectID, subgraphName, versionOrTag string, req GraphQLRequest) (GraphQLResponse, error) {
+	if err := validateGraphQLTarget(projectID, subgraphName, versionOrTag); err != nil {
+		return GraphQLResponse{}, err
+	}
 	return s.Query(ctx, s.PublicURL(projectID, subgraphName, versionOrTag), req, false)
 }
 
 // QueryPrivate queries a private Subgraph GraphQL endpoint using the project
 // Bearer token.
 func (s *GraphQLService) QueryPrivate(ctx context.Context, projectID, subgraphName, versionOrTag string, req GraphQLRequest) (GraphQLResponse, error) {
+	if err := validateGraphQLTarget(projectID, subgraphName, versionOrTag); err != nil {
+		return GraphQLResponse{}, err
+	}
 	return s.Query(ctx, s.PrivateURL(projectID, subgraphName, versionOrTag), req, true)
+}
+
+func validateGraphQLTarget(projectID, subgraphName, versionOrTag string) error {
+	for _, field := range []struct {
+		label string
+		value string
+	}{
+		{label: "project ID", value: projectID},
+		{label: "subgraph name", value: subgraphName},
+		{label: "version or tag", value: versionOrTag},
+	} {
+		if strings.TrimSpace(field.value) == "" {
+			return fmt.Errorf("goldsky graphql: %s is required", field.label)
+		}
+	}
+	return nil
 }

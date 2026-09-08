@@ -4,7 +4,30 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0] - 2026-09-08
+## [Unreleased]
+
+### Added
+
+- Added `NewDataClient` for public GraphQL and Edge RPC use without a REST
+  project token.
+- Added a configurable 16 MiB response-body limit across REST, GraphQL, and
+  JSON-RPC clients.
+- Added explicit Edge allowlist and rate-limit-budget clearing support, package
+  documentation, and a batch Edge RPC example.
+
+### Fixed
+
+- Corrected Edge RPC authentication to use Goldsky's documented
+  `X-ERPC-Secret-Token` header instead of the unsupported `?key=` query.
+- Rejected empty or trailing JSON, malformed JSON-RPC envelopes, duplicate or
+  unknown batch IDs, and oversized responses.
+- Preserved both wrapped and raw pipeline state responses and reported decode
+  failures instead of silently returning empty state.
+- Tightened resource, GraphQL target, webhook URL, and Edge update validation.
+- Reworked the pipeline, GraphQL, RPC, and webhook examples around runnable,
+  documented scenarios and expanded setup, failure, and operations guidance.
+
+## [1.1.0] - 2026-09-08
 
 ### Fixed
 
@@ -21,6 +44,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   validation endpoint report malformed names as structured findings.
 - Corrected and expanded the runnable examples and README guidance.
 
+## [1.0.0] - 2026-09-08
+
 ### Added
 
 - Initial release of `goldsky-go`, built against Goldsky REST API v1.2.0.
@@ -35,4 +60,4 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Cancellation-aware pagers for pipelines, subgraphs, and Edge endpoints.
 - Streaming `multipart/form-data` subgraph deployment.
 - Table-driven contract tests for all 40 operations plus edge-case tests.
-- Seven runnable examples, a wiki documentation set, and API coverage map.
+- Runnable examples, security notes, an upgrade guide, and an API coverage map.

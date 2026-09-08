@@ -97,7 +97,7 @@ reference. The companion machine-readable source is
 | Capability | Go method | Docs |
 | --- | --- | --- |
 | GraphQL Subgraph query (public/private) | `GraphQL.Query`, `GraphQL.QueryPublic`, `GraphQL.QueryPrivate` | <https://docs.goldsky.com/subgraphs/graphql-endpoints> |
-| Edge JSON-RPC (single/batch) | `RPC.Call`, `RPC.Batch` | <https://docs.goldsky.com/edge-rpc/quickstart> |
+| Edge JSON-RPC (single/batch, `X-ERPC-Secret-Token` auth) | `RPC.Call`, `RPC.Batch` | <https://docs.goldsky.com/edge-rpc/quickstart> |
 | Webhook secret verification | `VerifyWebhookSecret`, `VerifyWebhookRequest` | <https://docs.goldsky.com/subgraphs/webhooks> |
 
 ## Pagination

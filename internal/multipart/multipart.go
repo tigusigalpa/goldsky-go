@@ -75,9 +75,6 @@ func NewBody(fields []Field, file File) (*Body, error) {
 
 	go func() {
 		var err error
-		if c, ok := file.Reader.(io.Closer); ok {
-			defer func() { _ = c.Close() }()
-		}
 		defer func() {
 			if err != nil {
 				_ = pw.CloseWithError(err)
@@ -85,6 +82,9 @@ func NewBody(fields []Field, file File) (*Body, error) {
 			}
 			_ = pw.Close()
 		}()
+		if c, ok := file.Reader.(io.Closer); ok {
+			defer func() { _ = c.Close() }()
+		}
 
 		for _, f := range fields {
 			if err = mw.WriteField(f.Name, f.Value); err != nil {

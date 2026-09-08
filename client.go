@@ -11,6 +11,10 @@ import (
 	"github.com/tigusigalpa/goldsky-go/internal/clock"
 )
 
+// ErrAPITokenRequired is returned when a REST control-plane or private
+// GraphQL operation is attempted without a project API token.
+var ErrAPITokenRequired = errors.New("goldsky: REST project API token is required")
+
 // Client is the top-level Goldsky client. It exposes grouped service clients
 // for the REST control plane and the GraphQL and Edge RPC data planes.
 //
@@ -41,9 +45,20 @@ type Client struct {
 // and options. It performs no network calls. The token is scoped to a single
 // Goldsky project and is sent as a Bearer header; it is never logged.
 func NewClient(apiToken string, options ...Option) (*Client, error) {
+	return newClient(apiToken, true, options...)
+}
+
+// NewDataClient creates a client for public GraphQL and Edge RPC calls without
+// requiring a REST project token. REST control-plane and private GraphQL calls
+// return ErrAPITokenRequired without sending a request.
+func NewDataClient(options ...Option) (*Client, error) {
+	return newClient("", false, options...)
+}
+
+func newClient(apiToken string, requireToken bool, options ...Option) (*Client, error) {
 	apiToken = strings.TrimSpace(apiToken)
-	if apiToken == "" {
-		return nil, errors.New("goldsky: API token is required")
+	if requireToken && apiToken == "" {
+		return nil, ErrAPITokenRequired
 	}
 
 	cfg := defaultConfig()
@@ -87,6 +102,9 @@ func NewClient(apiToken string, options ...Option) (*Client, error) {
 	}
 	if cfg.retry.MaxAttempts < 1 {
 		cfg.retry.MaxAttempts = 1
+	}
+	if cfg.maxResponseBodyBytes <= 0 {
+		return nil, fmt.Errorf("goldsky: max response body bytes must be positive, got %d", cfg.maxResponseBodyBytes)
 	}
 
 	c := &Client{

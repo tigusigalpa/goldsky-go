@@ -26,28 +26,27 @@ func main() {
 	defer cancel()
 
 	result, err := client.Pipelines.Validate(ctx, goldsky.ValidatePipelineRequest{
-		Name: "ethereum-blocks-example",
+		Name: "base-usdc-transfers",
 		Definition: goldsky.PipelineDefinition{
 			Sources: map[string]any{
-				"ethereum_blocks": map[string]any{
+				"base_transfers": map[string]any{
 					"type":         "dataset",
-					"dataset_name": "ethereum.raw_blocks",
-					"version":      "1.0.0",
+					"dataset_name": "base.erc20_transfers",
+					"version":      "1.2.0",
 					"start_at":     "latest",
 				},
 			},
 			Transforms: map[string]any{
-				"handle_block": map[string]any{
-					"type":        "handler",
-					"from":        "ethereum_blocks",
+				"usdc_transfers": map[string]any{
+					"type":        "sql",
 					"primary_key": "id",
-					"url":         "https://example.com/handle-block",
+					"sql":         "SELECT * FROM base_transfers WHERE address = lower('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913')",
 				},
 			},
 			Sinks: map[string]any{
 				"discard": map[string]any{
 					"type": "blackhole",
-					"from": "handle_block",
+					"from": "usdc_transfers",
 				},
 			},
 		},
