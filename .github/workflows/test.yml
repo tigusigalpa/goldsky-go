@@ -12,8 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: ['1.21', '1.22']
-    
+        go-version: ['1.22.x', 'stable']
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v5
@@ -33,7 +33,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v5
@@ -41,7 +41,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: '1.21'
+        go-version-file: go.mod
         cache: true
 
     - name: Run golangci-lint

@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/tigusigalpa/goldsky-go/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/tigusigalpa/goldsky-go/actions/workflows/ci.yml)
 [![Tests](https://github.com/tigusigalpa/goldsky-go/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/tigusigalpa/goldsky-go/actions/workflows/test.yml)
-[![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square&logo=go)](https://golang.org/)
+[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![CodeQL](https://github.com/tigusigalpa/goldsky-go/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/tigusigalpa/goldsky-go/actions/workflows/codeql.yml)
 [![Codecov](https://codecov.io/gh/tigusigalpa/goldsky-go/graph/badge.svg)](https://codecov.io/gh/tigusigalpa/goldsky-go)
