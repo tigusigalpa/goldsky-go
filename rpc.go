@@ -192,7 +192,7 @@ func (s *RPCService) post(ctx context.Context, chainID int64, req rpcRequest) (R
 	if err != nil {
 		return RPCResponse{}, &TransportError{Op: "rpc", Err: err}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return RPCResponse{}, &TransportError{Op: "rpc", Err: err}
@@ -234,7 +234,7 @@ func (s *RPCService) postBatch(ctx context.Context, chainID int64, reqs []rpcReq
 	if err != nil {
 		return nil, &TransportError{Op: "rpc", Err: err}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, &TransportError{Op: "rpc", Err: err}

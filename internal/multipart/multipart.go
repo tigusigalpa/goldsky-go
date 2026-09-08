@@ -76,7 +76,7 @@ func NewBody(fields []Field, file File) (*Body, error) {
 	go func() {
 		var err error
 		if c, ok := file.Reader.(io.Closer); ok {
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 		}
 		defer func() {
 			if err != nil {

@@ -24,7 +24,7 @@ func main() {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, "verified")
+		_, _ = fmt.Fprintln(w, "verified")
 	})
 
 	addr := os.Getenv("GOLDSKY_WEBHOOK_ADDR")

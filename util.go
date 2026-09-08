@@ -48,14 +48,6 @@ func redactURL(raw string) string {
 	return raw
 }
 
-// boolStr renders a bool as "0" or "1" for multipart form fields.
-func boolStr(b bool) string {
-	if b {
-		return "1"
-	}
-	return "0"
-}
-
 // isSafeMethod reports whether method is a retry-safe idempotent read.
 func isSafeMethod(method string) bool {
 	switch strings.ToUpper(method) {

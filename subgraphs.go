@@ -375,7 +375,7 @@ func (s *SubgraphService) Deploy(ctx context.Context, name, version string, opts
 	if err != nil {
 		return Subgraph{}, fmt.Errorf("goldsky: build deployment body: %w", err)
 	}
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 
 	resp, err := s.client.do(ctx, "PUT", []string{"subgraphs", name, "deployments", version}, requestOptions{multipart: body})
 	if err != nil {

@@ -1,7 +1,6 @@
 package goldsky
 
 import (
-	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -143,14 +142,4 @@ func requireBearer(t *testing.T, h http.Header) {
 	if got != "Bearer test-token" {
 		t.Fatalf("Authorization = %q, want %q", got, "Bearer test-token")
 	}
-}
-
-// jsonBody returns the pretty-ish body for comparison.
-func jsonBody(b []byte) string {
-	var out bytes.Buffer
-	_ = json.Indent(&out, b, "", "  ")
-	if out.Len() == 0 {
-		return string(b)
-	}
-	return out.String()
 }
