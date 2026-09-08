@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Go ${{ matrix.go }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.22.x', stable]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          check-latest: true
+      - name: Verify modules
+        run: go mod tidy && git diff --exit-code -- go.mod go.sum
+      - name: Build
+        run: go build ./...
+      - name: Build examples
+        run: go build ./examples/...
+      - name: Vet
+        run: go vet ./...
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "gofmt would modify:"
+            echo "$out"
+            exit 1
+          fi
+      - name: Test (race)
+        run: go test -race ./...
+      - name: Test (coverage)
+        run: go test -coverprofile=coverage.out ./...
+      - name: Audit
+        run: go vet ./...
+        continue-on-error: true
