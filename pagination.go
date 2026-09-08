@@ -3,6 +3,7 @@ package goldsky
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"strconv"
 )
@@ -61,7 +62,7 @@ type listPager[T any] struct {
 	segments  []string
 	pageSize  int
 	token     string
-	first     bool
+	done      bool
 	queryHook func(url.Values)
 }
 
@@ -69,6 +70,12 @@ type listPager[T any] struct {
 // completion via a nil token: when the server returns no next_page_token,
 // the returned page's HasMore is false and subsequent calls return no data.
 func (p *listPager[T]) nextPage(ctx context.Context) (Page[T], error) {
+	if p.done {
+		return Page[T]{}, nil
+	}
+	if err := validatePageSize(p.pageSize); err != nil {
+		return Page[T]{}, err
+	}
 	q := make(url.Values)
 	if p.pageSize > 0 {
 		q.Set("page_size", strconv.Itoa(p.pageSize))
@@ -87,10 +94,15 @@ func (p *listPager[T]) nextPage(ctx context.Context) (Page[T], error) {
 	if err := decodeJSON(resp.body, &page); err != nil {
 		return Page[T]{}, &TransportError{Op: p.method, Err: err}
 	}
-	if page.Pagination.NextPageToken != nil {
-		p.token = *page.Pagination.NextPageToken
+	if page.Pagination.NextPageToken != nil && *page.Pagination.NextPageToken != "" {
+		next := *page.Pagination.NextPageToken
+		if next == p.token {
+			return Page[T]{}, fmt.Errorf("goldsky: pagination token did not advance")
+		}
+		p.token = next
 	} else {
 		p.token = ""
+		p.done = true
 	}
 	return page, nil
 }

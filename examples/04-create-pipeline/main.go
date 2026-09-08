@@ -29,13 +29,31 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+	name := os.Getenv("GOLDSKY_PIPELINE_NAME")
+	if name == "" {
+		name = "ethereum-blocks-example"
+	}
 
 	p, err := client.Pipelines.Create(ctx, goldsky.CreatePipelineRequest{
-		Name: "example-pipeline",
+		Name:         name,
+		ResourceSize: "s",
+		Description:  "Example pipeline created with goldsky-go",
 		Definition: goldsky.PipelineDefinition{
-			Sources:    map[string]any{"src": map[string]any{"type": "ethereum"}},
+			Sources: map[string]any{
+				"ethereum_blocks": map[string]any{
+					"type":         "dataset",
+					"dataset_name": "ethereum.raw_blocks",
+					"version":      "1.0.0",
+					"start_at":     "latest",
+				},
+			},
 			Transforms: map[string]any{},
-			Sinks:      map[string]any{"out": map[string]any{"type": "postgres"}},
+			Sinks: map[string]any{
+				"discard": map[string]any{
+					"type": "blackhole",
+					"from": "ethereum_blocks",
+				},
+			},
 		},
 	})
 	if err != nil {

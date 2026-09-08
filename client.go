@@ -2,7 +2,11 @@ package goldsky
 
 import (
 	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/tigusigalpa/goldsky-go/internal/clock"
 )
@@ -44,16 +48,42 @@ func NewClient(apiToken string, options ...Option) (*Client, error) {
 
 	cfg := defaultConfig()
 	for _, opt := range options {
+		if opt == nil {
+			return nil, errors.New("goldsky: nil client option")
+		}
 		opt(&cfg)
 	}
+	if err := validateBaseURL(cfg.baseURL, "REST base URL"); err != nil {
+		return nil, err
+	}
+	if err := validateBaseURL(cfg.edgeBaseURL, "Edge base URL"); err != nil {
+		return nil, err
+	}
 	if cfg.httpClient == nil {
-		cfg.httpClient = defaultConfig().httpClient
+		cfg.httpClient = &http.Client{Timeout: 60 * time.Second}
+	} else {
+		clone := *cfg.httpClient
+		cfg.httpClient = &clone
+	}
+	if cfg.httpTimeout != nil {
+		if *cfg.httpTimeout < 0 {
+			return nil, fmt.Errorf("goldsky: timeout must not be negative: %s", *cfg.httpTimeout)
+		}
+		cfg.httpClient.Timeout = *cfg.httpTimeout
 	}
 	if cfg.clock == nil {
 		cfg.clock = clock.SystemClock{}
 	}
 	if cfg.sleeper == nil {
 		cfg.sleeper = clock.SystemSleeper{}
+	}
+	if cfg.retry.MaxAttempts == 0 {
+		cfg.retry.MaxAttempts = DefaultRetryPolicy().MaxAttempts
+	} else if cfg.retry.MaxAttempts < 0 {
+		return nil, fmt.Errorf("goldsky: retry max attempts must not be negative: %d", cfg.retry.MaxAttempts)
+	}
+	if cfg.retry.InitialBackoff < 0 || cfg.retry.MaxBackoff < 0 {
+		return nil, errors.New("goldsky: retry backoff durations must not be negative")
 	}
 	if cfg.retry.MaxAttempts < 1 {
 		cfg.retry.MaxAttempts = 1
@@ -68,8 +98,8 @@ func NewClient(apiToken string, options ...Option) (*Client, error) {
 	c.Webhooks = &WebhookService{client: c}
 	c.Edge = &EdgeService{client: c}
 	c.Catalogs = &CatalogService{client: c}
-	c.GraphQL = &GraphQLService{client: c, edgeAPIKey: cfg.edgeAPIKey, baseURL: DefaultGraphQLBaseURL}
-	c.RPC = &RPCService{client: c, edgeAPIKey: cfg.edgeAPIKey, baseURL: cfg.edgeBaseURL}
+	c.GraphQL = &GraphQLService{client: c, baseURL: DefaultGraphQLBaseURL}
+	c.RPC = &RPCService{client: c, edgeAPIKey: strings.TrimSpace(cfg.edgeAPIKey), baseURL: cfg.edgeBaseURL}
 	return c, nil
 }
 
@@ -79,9 +109,23 @@ func (c *Client) BaseURL() string { return c.cfg.baseURL }
 // UserAgent returns the User-Agent header sent on REST requests.
 func (c *Client) UserAgent() string { return c.cfg.userAgent }
 
-// SetEdgeAPIKey changes the Edge endpoint API key used by the RPC and GraphQL
-// private helpers. The Edge key is a separate secret from the REST token.
+// SetEdgeAPIKey changes the Edge endpoint API key used by RPC calls. It is safe
+// to call while other goroutines use the client. The Edge key is a separate
+// secret from the REST token used by private GraphQL calls.
 func (c *Client) SetEdgeAPIKey(key string) {
-	c.RPC.edgeAPIKey = key
-	c.GraphQL.edgeAPIKey = key
+	c.RPC.setAPIKey(strings.TrimSpace(key))
+}
+
+func validateBaseURL(raw, label string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("goldsky: invalid %s %q", label, raw)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("goldsky: invalid %s scheme %q", label, u.Scheme)
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("goldsky: %s must not contain a query or fragment", label)
+	}
+	return nil
 }

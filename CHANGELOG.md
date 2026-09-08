@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [1.0.0] - 2026-09-08
 
+### Fixed
+
+- Made pagers stop after the terminal page and validate page sizes before a
+  request.
+- Made HTTP response status authoritative for problem details and rejected
+  trailing JSON values.
+- Prevented retries of non-replayable streaming deployments and rejected CR/LF
+  injection in multipart filenames.
+- Made timeout options order-independent without mutating a supplied HTTP
+  client, escaped GraphQL path components, and validated JSON-RPC inputs and
+  response IDs.
+- Added the documented `definition.name` pipeline authoring field and let the
+  validation endpoint report malformed names as structured findings.
+- Corrected and expanded the runnable examples and README guidance.
+
 ### Added
 
 - Initial release of `goldsky-go`, built against Goldsky REST API v1.2.0.

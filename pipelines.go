@@ -15,6 +15,7 @@ import (
 // additions do not cause decode failures.
 type PipelineStatus string
 
+// Known pipeline lifecycle states.
 const (
 	PipelineStatusRunning    PipelineStatus = "RUNNING"
 	PipelineStatusPaused     PipelineStatus = "PAUSED"
@@ -30,6 +31,9 @@ const (
 // transforms, and sinks are intentionally open object maps in the OpenAPI
 // contract, so they are exposed as map[string]any.
 type PipelineDefinition struct {
+	// Name may hold the pipeline name when the authoring payload keeps it
+	// inside definition. A top-level request Name takes precedence.
+	Name           string         `json:"name,omitempty"`
 	Sources        map[string]any `json:"sources"`
 	Transforms     map[string]any `json:"transforms"`
 	Sinks          map[string]any `json:"sinks"`
@@ -217,7 +221,6 @@ func (s *PipelineService) NewPipelinePager(opts ListPipelinesOptions) *PipelineP
 		segments: []string{"pipelines"},
 		pageSize: opts.PageSize,
 		token:    opts.PageToken,
-		first:    true,
 	}
 	if opts.Type != "" {
 		p.queryHook = func(q url.Values) { q.Set("type", opts.Type) }
@@ -280,11 +283,6 @@ func (s *PipelineService) Delete(ctx context.Context, name string) error {
 // Validate validates a pipeline definition without creating it. See
 // https://api.goldsky.com/api/v1/docs#tag/Pipeline%20Authoring/operation/validatePipeline
 func (s *PipelineService) Validate(ctx context.Context, req ValidatePipelineRequest) (ValidatePipelineResponse, error) {
-	if req.Name != "" {
-		if err := validatePipelineName(req.Name); err != nil {
-			return ValidatePipelineResponse{}, err
-		}
-	}
 	resp, err := s.client.do(ctx, "POST", []string{"pipelines", "validate"}, requestOptions{jsonBody: req})
 	if err != nil {
 		return ValidatePipelineResponse{}, err

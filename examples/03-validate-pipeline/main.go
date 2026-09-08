@@ -26,22 +26,41 @@ func main() {
 	defer cancel()
 
 	result, err := client.Pipelines.Validate(ctx, goldsky.ValidatePipelineRequest{
-		Name: "example-pipeline",
+		Name: "ethereum-blocks-example",
 		Definition: goldsky.PipelineDefinition{
-			Sources:    map[string]any{"src": map[string]any{"type": "ethereum"}},
-			Transforms: map[string]any{},
-			Sinks:      map[string]any{"out": map[string]any{"type": "postgres"}},
+			Sources: map[string]any{
+				"ethereum_blocks": map[string]any{
+					"type":         "dataset",
+					"dataset_name": "ethereum.raw_blocks",
+					"version":      "1.0.0",
+					"start_at":     "latest",
+				},
+			},
+			Transforms: map[string]any{
+				"handle_block": map[string]any{
+					"type":        "handler",
+					"from":        "ethereum_blocks",
+					"primary_key": "id",
+					"url":         "https://example.com/handle-block",
+				},
+			},
+			Sinks: map[string]any{
+				"discard": map[string]any{
+					"type": "blackhole",
+					"from": "handle_block",
+				},
+			},
 		},
 	})
 	if err != nil {
 		log.Fatalf("validate: %v", err)
 	}
 
-	fmt.Printf("valid=%t\n", result.Valid)
+	fmt.Printf("Pipeline definition valid: %t\n", result.Valid)
 	for _, e := range result.Errors {
-		fmt.Printf("  error: %s\n", e.Message)
+		fmt.Printf("  error (%s): %s\n", e.Field, e.Message)
 	}
 	for _, w := range result.Warnings {
-		fmt.Printf("  warning: %s\n", w.Message)
+		fmt.Printf("  warning (%s): %s\n", w.Field, w.Message)
 	}
 }

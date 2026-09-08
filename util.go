@@ -15,6 +15,10 @@ func ioDiscard() io.Writer { return io.Discard }
 // a delta-seconds integer or an HTTP-date. It returns the wait duration.
 // Unparseable values return (0, false).
 func parseRetryAfter(value string) (seconds int, ok bool) {
+	return parseRetryAfterAt(value, time.Now())
+}
+
+func parseRetryAfterAt(value string, now time.Time) (seconds int, ok bool) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return 0, false
@@ -26,7 +30,7 @@ func parseRetryAfter(value string) (seconds int, ok bool) {
 		return n, true
 	}
 	if t, err := http.ParseTime(value); err == nil {
-		d := time.Until(t)
+		d := t.Sub(now)
 		if d < 0 {
 			return 0, true
 		}

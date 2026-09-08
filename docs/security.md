@@ -43,7 +43,9 @@ secrets.
 Mutations are not retried by default because Goldsky does not document
 idempotency keys. Automatic retry applies only to safe reads (`GET`, `HEAD`,
 `OPTIONS`) on transport errors and 429/500/502/503/504. Opt in to mutation
-retry with `WithRetryMutations()` only when you understand the risk.
+retry with `WithRetryMutations()` only when you understand the risk. Streaming
+subgraph deployments are never retried because their readers cannot be replayed
+safely.
 
 ## RBAC
 

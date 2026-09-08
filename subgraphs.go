@@ -15,6 +15,7 @@ import (
 // SubgraphStatus is the lifecycle state of a deployed subgraph version.
 type SubgraphStatus string
 
+// Known subgraph lifecycle states.
 const (
 	SubgraphStatusActive SubgraphStatus = "ACTIVE"
 	SubgraphStatusPaused SubgraphStatus = "PAUSED"
@@ -23,6 +24,7 @@ const (
 // SubgraphHealth is the indexing health of a subgraph deployment.
 type SubgraphHealth string
 
+// Known subgraph indexing health values.
 const (
 	SubgraphHealthHealthy   SubgraphHealth = "HEALTHY"
 	SubgraphHealthUnhealthy SubgraphHealth = "UNHEALTHY"
@@ -182,7 +184,6 @@ func (s *SubgraphService) NewSubgraphPager(opts ListSubgraphsOptions) *SubgraphP
 		segments: []string{"subgraphs"},
 		pageSize: opts.PageSize,
 		token:    opts.PageToken,
-		first:    true,
 	}}
 }
 
@@ -365,12 +366,16 @@ func (s *SubgraphService) Deploy(ctx context.Context, name, version string, opts
 		fields = append(fields, multipart.Field{Name: "graph_node_shard", Value: opts.GraphNodeShard})
 	}
 
-	body := multipart.NewBody(fields, multipart.File{
+	body, err := multipart.NewBody(fields, multipart.File{
 		FieldName:   "bundle",
 		Filename:    opts.BundleFilename,
 		ContentType: "application/zip",
 		Reader:      opts.Bundle,
 	})
+	if err != nil {
+		return Subgraph{}, fmt.Errorf("goldsky: build deployment body: %w", err)
+	}
+	defer body.Close()
 
 	resp, err := s.client.do(ctx, "PUT", []string{"subgraphs", name, "deployments", version}, requestOptions{multipart: body})
 	if err != nil {

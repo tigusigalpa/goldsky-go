@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
@@ -11,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tigusigalpa/goldsky-go/internal/clock"
 	"github.com/tigusigalpa/goldsky-go/internal/multipart"
 )
 
@@ -49,7 +49,7 @@ func (c *Client) do(ctx context.Context, method string, segments []string, opts 
 
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		bodyReader, contentType, err := c.buildBody(opts, attempt)
+		bodyReader, contentType, err := c.buildBody(opts)
 		if err != nil {
 			return nil, &TransportError{Op: method, Err: err}
 		}
@@ -57,8 +57,10 @@ func (c *Client) do(ctx context.Context, method string, segments []string, opts 
 		resp, sendErr := c.sendOnce(ctx, method, segments, bodyReader, contentType, opts)
 		if sendErr != nil {
 			lastErr = &TransportError{Op: method, Err: sendErr}
-			if (safe || retryMutations) && attempt < attempts {
-				if waitErr := c.wait(ctx, c.backoff(attempt, nil)); waitErr != nil {
+			if (safe || retryMutations) && opts.multipart == nil && attempt < attempts {
+				d := c.backoff(attempt, nil)
+				c.logRetry(method, attempt, attempts, d)
+				if waitErr := c.wait(ctx, d); waitErr != nil {
 					return nil, &TransportError{Op: method, Err: waitErr}
 				}
 				continue
@@ -70,8 +72,10 @@ func (c *Client) do(ctx context.Context, method string, segments []string, opts 
 		_ = resp.Body.Close()
 		if readErr != nil {
 			lastErr = &TransportError{Op: method, Err: readErr}
-			if (safe || retryMutations) && attempt < attempts {
-				if waitErr := c.wait(ctx, c.backoff(attempt, nil)); waitErr != nil {
+			if (safe || retryMutations) && opts.multipart == nil && attempt < attempts {
+				d := c.backoff(attempt, nil)
+				c.logRetry(method, attempt, attempts, d)
+				if waitErr := c.wait(ctx, d); waitErr != nil {
 					return nil, &TransportError{Op: method, Err: waitErr}
 				}
 				continue
@@ -87,24 +91,23 @@ func (c *Client) do(ctx context.Context, method string, segments []string, opts 
 		lastErr = problem
 
 		retryable := retryableStatus(resp.StatusCode) || resp.StatusCode == 0
-		canRetry := (safe || retryMutations) && attempt < attempts && retryable
+		canRetry := (safe || retryMutations) && opts.multipart == nil && attempt < attempts && retryable
 		if !canRetry {
 			return nil, problem
 		}
-		if waitErr := c.wait(ctx, c.backoffWithRetryAfter(attempt, resp.Header)); waitErr != nil {
+		d := c.backoffWithRetryAfter(attempt, resp.Header)
+		c.logRetry(method, attempt, attempts, d)
+		if waitErr := c.wait(ctx, d); waitErr != nil {
 			return nil, &TransportError{Op: method, Err: waitErr}
 		}
 	}
 	return nil, lastErr
 }
 
-// buildBody constructs the request body reader and content type for an attempt.
-// Multipart bodies are rebuilt each attempt because they are streamed and can
-// only be consumed once.
-func (c *Client) buildBody(opts requestOptions, attempt int) (io.Reader, string, error) {
+// buildBody constructs the request body reader and content type. Multipart
+// bodies are streamed and therefore excluded from automatic retries.
+func (c *Client) buildBody(opts requestOptions) (io.Reader, string, error) {
 	if opts.multipart != nil {
-		// A multipart.Body can only be read once; on retry the caller must
-		// supply a fresh body. We detect a spent body and fail loudly.
 		return opts.multipart, opts.multipart.ContentType(), nil
 	}
 	if opts.jsonBody != nil {
@@ -115,6 +118,12 @@ func (c *Client) buildBody(opts requestOptions, attempt int) (io.Reader, string,
 		return bytes.NewReader(buf), "application/json", nil
 	}
 	return nil, "", nil
+}
+
+func (c *Client) logRetry(method string, attempt, attempts int, d time.Duration) {
+	if c.cfg.logger != nil {
+		c.cfg.logger.Printf("retrying %s after %s (attempt %d/%d)", strings.ToUpper(method), d, attempt+1, attempts)
+	}
 }
 
 // sendOnce performs a single HTTP attempt without retry logic.
@@ -177,11 +186,15 @@ func (c *Client) backoff(attempt int, header http.Header) time.Duration {
 		max = 30 * time.Second
 	}
 	d := initial
+	if d > max {
+		d = max
+	}
 	for i := 1; i < attempt; i++ {
-		d *= 2
-		if d > max {
+		if d >= max-d {
 			d = max
+			break
 		}
+		d *= 2
 	}
 	// Full jitter: randomize within [0, d].
 	if d > 0 {
@@ -196,7 +209,7 @@ func (c *Client) backoff(attempt int, header http.Header) time.Duration {
 func (c *Client) backoffWithRetryAfter(attempt int, header http.Header) time.Duration {
 	d := c.backoff(attempt, header)
 	if header != nil {
-		if secs, ok := parseRetryAfter(header.Get("Retry-After")); ok && secs > 0 {
+		if secs, ok := parseRetryAfterAt(header.Get("Retry-After"), c.cfg.clock.Now()); ok && secs > 0 {
 			ra := time.Duration(secs) * time.Second
 			if ra > d {
 				d = ra
@@ -226,6 +239,9 @@ func parseProblem(resp *http.Response, body []byte) *ProblemDetails {
 		p.Type = "about:blank"
 		return p
 	}
+	// The HTTP status line is authoritative even if a malformed server or
+	// intermediary supplies a conflicting status member in the JSON body.
+	p.Status = resp.StatusCode
 	if p.Type == "" {
 		p.Type = "about:blank"
 	}
@@ -239,8 +255,14 @@ func decodeJSON(body []byte, target interface{}) error {
 	}
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.UseNumber()
-	return dec.Decode(target)
+	if err := dec.Decode(target); err != nil {
+		return err
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("unexpected trailing JSON value")
+		}
+		return fmt.Errorf("unexpected trailing data: %w", err)
+	}
+	return nil
 }
-
-// ensure the clock import is used when only SystemClock is referenced indirectly.
-var _ clock.Clock = clock.SystemClock{}

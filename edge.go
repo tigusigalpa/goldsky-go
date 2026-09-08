@@ -11,6 +11,7 @@ import (
 // EdgeProduct is the product type of an Edge endpoint.
 type EdgeProduct string
 
+// Supported Edge product values.
 const (
 	EdgeProductRPC   EdgeProduct = "rpc"
 	EdgeProductData  EdgeProduct = "data"
@@ -20,6 +21,7 @@ const (
 // EdgeStatus is the lifecycle state of an Edge endpoint.
 type EdgeStatus string
 
+// Known Edge endpoint lifecycle states.
 const (
 	EdgeStatusActive EdgeStatus = "ACTIVE"
 	EdgeStatusPaused EdgeStatus = "PAUSED"
@@ -30,6 +32,7 @@ const (
 // preserved verbatim so future additions do not break decoding.
 type EdgeRateLimitBudget string
 
+// Available Edge endpoint rate-limit budgets.
 const (
 	EdgeTier6kUnlimitedPerIP   EdgeRateLimitBudget = "edge-tier-6krpm-total-unlimited-per-ip"
 	EdgeTier60kUnlimitedPerIP  EdgeRateLimitBudget = "edge-tier-60krpm-total-unlimited-per-ip"
@@ -183,7 +186,6 @@ func (s *EdgeService) NewEdgePager(opts ListEdgeEndpointsOptions) *EdgePager {
 		segments: []string{"edge"},
 		pageSize: opts.PageSize,
 		token:    opts.PageToken,
-		first:    true,
 	}
 	if opts.Product != "" {
 		p.queryHook = func(q url.Values) { q.Set("product", opts.Product) }

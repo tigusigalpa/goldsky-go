@@ -57,6 +57,43 @@ func TestPaginationContinuation(t *testing.T) {
 	}
 }
 
+func TestPagerStopsAfterLastPage(t *testing.T) {
+	ts := newTestServer(t)
+	ts.setJSON(200, map[string]any{
+		"data":       []any{map[string]any{"name": "only"}},
+		"pagination": map[string]any{"next_page_token": nil, "page_size": 50},
+	})
+	c := newTestClient(t, ts)
+	pager := c.Pipelines.NewPipelinePager(ListPipelinesOptions{PageSize: 50})
+
+	first, err := pager.NextPage(context.Background())
+	if err != nil || len(first.Data) != 1 {
+		t.Fatalf("first page = %+v, %v", first, err)
+	}
+	second, err := pager.NextPage(context.Background())
+	if err != nil {
+		t.Fatalf("second page: %v", err)
+	}
+	if len(second.Data) != 0 || second.HasMore() {
+		t.Fatalf("page after completion = %+v", second)
+	}
+	if got := ts.requestCount(); got != 1 {
+		t.Fatalf("request count = %d, want 1", got)
+	}
+}
+
+func TestPagerRejectsInvalidPageSize(t *testing.T) {
+	ts := newTestServer(t)
+	c := newTestClient(t, ts)
+	pager := c.Subgraphs.NewSubgraphPager(ListSubgraphsOptions{PageSize: 201})
+	if _, err := pager.NextPage(context.Background()); err == nil {
+		t.Fatal("expected page-size validation error")
+	}
+	if got := ts.requestCount(); got != 0 {
+		t.Fatalf("request count = %d, want 0", got)
+	}
+}
+
 // TestURLEncoding verifies path segments with special characters are encoded.
 func TestURLEncoding(t *testing.T) {
 	ts := newTestServer(t)
@@ -98,6 +135,16 @@ func TestRetryAfter(t *testing.T) {
 	}
 	if got := attempts.Load(); got != 3 {
 		t.Errorf("attempts = %d, want 3", got)
+	}
+}
+
+func TestRetryAfterUsesInjectedClock(t *testing.T) {
+	now := time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC)
+	ts := newTestServer(t)
+	c := newTestClient(t, ts, WithClock(clock.NewFakeClock(now)))
+	header := http.Header{"Retry-After": []string{now.Add(10 * time.Second).Format(http.TimeFormat)}}
+	if got := c.backoffWithRetryAfter(1, header); got != 10*time.Second {
+		t.Fatalf("backoff = %s, want 10s", got)
 	}
 }
 
@@ -150,6 +197,34 @@ func TestMutationRetryOptIn(t *testing.T) {
 	}
 }
 
+func TestValidatePipelineDefersNameValidationToAPI(t *testing.T) {
+	ts := newTestServer(t)
+	ts.setJSON(200, ValidatePipelineResponse{
+		Valid:  false,
+		Errors: []ValidationMessage{{Field: "name", Message: "invalid name"}},
+	})
+	c := newTestClient(t, ts)
+	result, err := c.Pipelines.Validate(context.Background(), ValidatePipelineRequest{
+		Name: "Invalid Name",
+		Definition: PipelineDefinition{
+			Name:       "definition-name",
+			Sources:    map[string]any{},
+			Transforms: map[string]any{},
+			Sinks:      map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if result.Valid || len(result.Errors) != 1 || result.Errors[0].Field != "name" {
+		t.Fatalf("validation result = %+v", result)
+	}
+	body := string(ts.lastRequest().Body)
+	if !strings.Contains(body, `"name":"Invalid Name"`) || !strings.Contains(body, `"definition":{"name":"definition-name"`) {
+		t.Fatalf("request body does not preserve both supported name locations: %s", body)
+	}
+}
+
 // TestProblemParsing verifies RFC 9457 problem details are parsed.
 func TestProblemParsing(t *testing.T) {
 	ts := newTestServer(t)
@@ -174,6 +249,17 @@ func TestProblemParsing(t *testing.T) {
 	}
 	if len(p.Errors) != 1 || p.Errors[0].Field != "name" {
 		t.Errorf("validation errors = %+v", p.Errors)
+	}
+}
+
+func TestProblemHTTPStatusIsAuthoritative(t *testing.T) {
+	ts := newTestServer(t)
+	ts.setResponse(http.StatusNotFound, []byte(`{"type":"x","status":500}`))
+	c := newTestClient(t, ts)
+	_, err := c.Subgraphs.Get(context.Background(), "missing")
+	p := AsProblem(err)
+	if p == nil || p.Status != http.StatusNotFound || !p.IsNotFound() {
+		t.Fatalf("problem = %+v, want HTTP status 404", p)
 	}
 }
 
@@ -202,6 +288,16 @@ func TestMalformedJSON(t *testing.T) {
 	}
 	if AsTransport(err) == nil {
 		t.Errorf("expected TransportError, got %T: %v", err, err)
+	}
+}
+
+func TestTrailingJSONIsRejected(t *testing.T) {
+	ts := newTestServer(t)
+	ts.setResponse(200, []byte(`{"data":[],"pagination":{}} {"unexpected":true}`))
+	c := newTestClient(t, ts)
+	_, err := c.Pipelines.List(context.Background(), ListPipelinesOptions{})
+	if AsTransport(err) == nil {
+		t.Fatalf("expected TransportError, got %T: %v", err, err)
 	}
 }
 
@@ -255,6 +351,35 @@ func TestDeployRejectsOverwriteOne(t *testing.T) {
 	}
 	if ts.requestCount() != 0 {
 		t.Errorf("no request should have been sent")
+	}
+}
+
+func TestDeployRejectsHeaderInjection(t *testing.T) {
+	ts := newTestServer(t)
+	c := newTestClient(t, ts)
+	_, err := c.Subgraphs.Deploy(context.Background(), "s", "v1", DeploySubgraphOptions{
+		Bundle: bytes.NewReader([]byte{1}), BundleFilename: "build.zip\r\nX-Injected: yes",
+	})
+	if err == nil || !strings.Contains(err.Error(), "CR or LF") {
+		t.Fatalf("expected unsafe filename rejection, got %v", err)
+	}
+	if got := ts.requestCount(); got != 0 {
+		t.Fatalf("request count = %d, want 0", got)
+	}
+}
+
+func TestDeployIsNotRetried(t *testing.T) {
+	ts := newTestServer(t)
+	ts.setResponse(http.StatusServiceUnavailable, []byte(`{"type":"x","status":503}`))
+	c := newTestClient(t, ts, WithRetryMaxAttempts(3), WithRetryMutations())
+	_, err := c.Subgraphs.Deploy(context.Background(), "s", "v1", DeploySubgraphOptions{
+		Bundle: bytes.NewReader([]byte{1}), BundleFilename: "build.zip",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if got := ts.requestCount(); got != 1 {
+		t.Fatalf("request count = %d, want 1", got)
 	}
 }
 
@@ -312,6 +437,19 @@ func TestGraphQLErrorEnvelope(t *testing.T) {
 	}
 	if len(resp.Errors[0].Raw) == 0 {
 		t.Error("Raw error object not retained")
+	}
+}
+
+func TestGraphQLNonJSONHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+	}))
+	t.Cleanup(srv.Close)
+	c := newTestClient(t, newTestServer(t))
+	resp, err := c.GraphQL.Query(context.Background(), srv.URL, GraphQLRequest{Query: "{ x }"}, false)
+	p := AsProblem(err)
+	if p == nil || p.Status != http.StatusBadGateway || resp.Status != http.StatusBadGateway {
+		t.Fatalf("response = %+v, error = %v", resp, err)
 	}
 }
 
@@ -420,6 +558,33 @@ func TestNewClientRequiresToken(t *testing.T) {
 	}
 }
 
+func TestWithTimeoutDoesNotMutateHTTPClient(t *testing.T) {
+	httpClient := &http.Client{Timeout: time.Minute}
+	c, err := NewClient("token", WithTimeout(time.Second), WithHTTPClient(httpClient))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if httpClient.Timeout != time.Minute {
+		t.Fatalf("supplied client timeout mutated to %s", httpClient.Timeout)
+	}
+	if c.cfg.httpClient.Timeout != time.Second {
+		t.Fatalf("configured timeout = %s, want 1s", c.cfg.httpClient.Timeout)
+	}
+}
+
+func TestNewClientRejectsInvalidConfiguration(t *testing.T) {
+	for _, opts := range [][]Option{
+		{nil},
+		{WithBaseURL("not a URL")},
+		{WithRetryMaxAttempts(-1)},
+		{WithTimeout(-time.Second)},
+	} {
+		if _, err := NewClient("token", opts...); err == nil {
+			t.Fatalf("expected error for options %#v", opts)
+		}
+	}
+}
+
 // TestGraphQLURLs verifies public/private URL construction.
 func TestGraphQLURLs(t *testing.T) {
 	c := newTestClient(t, newTestServer(t))
@@ -433,6 +598,14 @@ func TestGraphQLURLs(t *testing.T) {
 	}
 }
 
+func TestGraphQLURLsEscapePathSegments(t *testing.T) {
+	c := newTestClient(t, newTestServer(t))
+	u := c.GraphQL.PublicURL("project/one", "my subgraph", "v1/current")
+	if !strings.Contains(u, "project%2Fone") || !strings.Contains(u, "my%20subgraph") || !strings.Contains(u, "v1%2Fcurrent") {
+		t.Fatalf("public URL does not escape path segments: %q", u)
+	}
+}
+
 // TestEdgeEndpointURL verifies the Edge RPC URL includes the chain ID and key.
 func TestEdgeEndpointURL(t *testing.T) {
 	c := newTestClient(t, newTestServer(t), WithEdgeAPIKey("ek"))
@@ -440,6 +613,31 @@ func TestEdgeEndpointURL(t *testing.T) {
 	if !strings.Contains(u, "/evm/137?") || !strings.Contains(u, "key=ek") {
 		t.Errorf("endpoint url = %q", u)
 	}
+}
+
+func TestEdgeRPCValidatesInput(t *testing.T) {
+	c := newTestClient(t, newTestServer(t), WithEdgeAPIKey("ek"))
+	if err := c.RPC.Call(context.Background(), 0, "eth_chainId", nil, nil); err == nil {
+		t.Fatal("expected invalid chain ID error")
+	}
+	if err := c.RPC.Call(context.Background(), 1, " ", nil, nil); err == nil {
+		t.Fatal("expected empty method error")
+	}
+}
+
+func TestSetEdgeAPIKeyIsConcurrencySafe(t *testing.T) {
+	c := newTestClient(t, newTestServer(t), WithEdgeAPIKey("initial"))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 100; i++ {
+			c.SetEdgeAPIKey("rotated")
+		}
+	}()
+	for i := 0; i < 100; i++ {
+		_ = c.RPC.EndpointURL(1)
+	}
+	<-done
 }
 
 // jsonInt renders an int64 as a JSON number string.

@@ -1,6 +1,7 @@
 package goldsky
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"time"
@@ -55,16 +56,30 @@ type config struct {
 	baseURL     string
 	userAgent   string
 	httpClient  *http.Client
+	httpTimeout *time.Duration
 	retry       RetryPolicy
 	logger      *log.Logger
-	clock       clock.Clock
-	sleeper     clock.Sleeper
+	clock       Clock
+	sleeper     Sleeper
 	edgeAPIKey  string
 	edgeBaseURL string
 }
 
 // Option configures a Client.
 type Option func(*config)
+
+// Clock supplies the current time for Retry-After calculations. Most callers
+// should use the system clock configured by default; the interface exists for
+// deterministic tests.
+type Clock interface {
+	Now() time.Time
+}
+
+// Sleeper waits between retry attempts while respecting cancellation. Most
+// callers should use the context-aware system sleeper configured by default.
+type Sleeper interface {
+	Sleep(context.Context, time.Duration) error
+}
 
 // WithBaseURL overrides the REST control-plane base URL.
 func WithBaseURL(url string) Option {
@@ -76,15 +91,12 @@ func WithHTTPClient(h *http.Client) Option {
 	return func(c *config) { c.httpClient = h }
 }
 
-// WithTimeout sets the timeout on the default *http.Client. It is ignored when
-// WithHTTPClient is also used; supply the timeout on your own client instead.
+// WithTimeout sets the timeout used by the client. When combined with
+// WithHTTPClient, the supplied client is shallow-cloned before its timeout is
+// changed, so the caller's *http.Client is never mutated.
 func WithTimeout(d time.Duration) Option {
 	return func(c *config) {
-		if c.httpClient == nil {
-			c.httpClient = &http.Client{Timeout: d}
-		} else {
-			c.httpClient.Timeout = d
-		}
+		c.httpTimeout = &d
 	}
 }
 
@@ -103,7 +115,9 @@ func WithRetryMaxAttempts(n int) Option {
 	return func(c *config) { c.retry.MaxAttempts = n }
 }
 
-// WithRetryMutations opts in to retrying non-idempotent mutations. Unsafe.
+// WithRetryMutations opts in to retrying replayable non-idempotent mutations.
+// Streaming multipart deployments are never retried because their readers
+// cannot be replayed safely. Unsafe.
 func WithRetryMutations() Option {
 	return func(c *config) { c.retry.RetryMutations = true }
 }
@@ -114,12 +128,12 @@ func WithLogger(l *log.Logger) Option {
 }
 
 // WithClock injects a Clock for deterministic tests.
-func WithClock(cl clock.Clock) Option {
+func WithClock(cl Clock) Option {
 	return func(c *config) { c.clock = cl }
 }
 
 // WithSleeper injects a Sleeper for deterministic retry tests.
-func WithSleeper(s clock.Sleeper) Option {
+func WithSleeper(s Sleeper) Option {
 	return func(c *config) { c.sleeper = s }
 }
 
@@ -139,7 +153,6 @@ func defaultConfig() config {
 	return config{
 		baseURL:     DefaultBaseURL,
 		userAgent:   DefaultUserAgent,
-		httpClient:  &http.Client{Timeout: 60 * time.Second},
 		retry:       DefaultRetryPolicy(),
 		logger:      log.New(ioDiscard(), "goldsky: ", 0),
 		clock:       clock.SystemClock{},

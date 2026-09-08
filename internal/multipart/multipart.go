@@ -3,9 +3,11 @@
 package multipart
 
 import (
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/textproto"
+	"strings"
 )
 
 // Field is a plain multipart form field sent as an ordinary value.
@@ -48,13 +50,34 @@ func (b *Body) ContentType() string { return b.contentType }
 // text fields followed by a single file part. The file's Reader is streamed and
 // closed when it implements io.Closer. The returned Body must be closed when the
 // request has been fully sent or cancelled.
-func NewBody(fields []Field, file File) *Body {
+func NewBody(fields []Field, file File) (*Body, error) {
+	if err := validateHeaderValue("file field name", file.FieldName); err != nil {
+		return nil, err
+	}
+	if err := validateHeaderValue("filename", file.Filename); err != nil {
+		return nil, err
+	}
+	if err := validateHeaderValue("content type", file.ContentType); err != nil {
+		return nil, err
+	}
+	if file.Reader == nil {
+		return nil, fmt.Errorf("multipart: file reader is required")
+	}
+	for _, field := range fields {
+		if err := validateHeaderValue("field name", field.Name); err != nil {
+			return nil, err
+		}
+	}
+
 	pr, pw := io.Pipe()
 	mw := multipart.NewWriter(pw)
 	contentType := mw.FormDataContentType()
 
 	go func() {
 		var err error
+		if c, ok := file.Reader.(io.Closer); ok {
+			defer c.Close()
+		}
 		defer func() {
 			if err != nil {
 				_ = pw.CloseWithError(err)
@@ -71,7 +94,7 @@ func NewBody(fields []Field, file File) *Body {
 
 		header := textproto.MIMEHeader{}
 		header.Set("Content-Disposition",
-			`form-data; name="`+file.FieldName+`"; filename="`+file.Filename+`"`)
+			`form-data; name="`+escapeQuotes(file.FieldName)+`"; filename="`+escapeQuotes(file.Filename)+`"`)
 		if file.ContentType != "" {
 			header.Set("Content-Type", file.ContentType)
 		}
@@ -83,11 +106,20 @@ func NewBody(fields []Field, file File) *Body {
 		if _, err = io.Copy(part, file.Reader); err != nil {
 			return
 		}
-		if c, ok := file.Reader.(io.Closer); ok {
-			_ = c.Close()
-		}
 		err = mw.Close()
 	}()
 
-	return &Body{reader: pr, contentType: contentType}
+	return &Body{reader: pr, contentType: contentType}, nil
+}
+
+func validateHeaderValue(label, value string) error {
+	if strings.ContainsAny(value, "\r\n") {
+		return fmt.Errorf("multipart: %s must not contain CR or LF", label)
+	}
+	return nil
+}
+
+func escapeQuotes(value string) string {
+	replacer := strings.NewReplacer("\\", "\\\\", `"`, `\"`)
+	return replacer.Replace(value)
 }

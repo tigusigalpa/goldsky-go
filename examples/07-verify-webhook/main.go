@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	goldsky "github.com/tigusigalpa/goldsky-go"
 )
@@ -30,6 +31,12 @@ func main() {
 	if addr == "" {
 		addr = "127.0.0.1:8080"
 	}
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           http.DefaultServeMux,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 	fmt.Printf("listening on %s; POST to /webhook with header %s\n", addr, goldsky.WebhookSecretHeader)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	log.Fatal(server.ListenAndServe())
 }

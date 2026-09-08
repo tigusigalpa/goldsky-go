@@ -19,7 +19,7 @@ type ProblemDetails struct {
 	Type string `json:"type,omitempty"`
 	// Title is a short, human-readable summary. Not stable; do not branch on it.
 	Title string `json:"title,omitempty"`
-	// Status is the HTTP status code copied into the problem body.
+	// Status is the authoritative HTTP response status code.
 	Status int `json:"status,omitempty"`
 	// Detail is a human-readable explanation specific to this occurrence.
 	Detail string `json:"detail,omitempty"`
@@ -51,7 +51,13 @@ func (e *ProblemDetails) Error() string {
 	}
 	status := e.Status
 	if status == 0 {
-		status = http.StatusOK
+		if e.Detail != "" {
+			return fmt.Sprintf("goldsky API error (%s): %s", e.Type, e.Detail)
+		}
+		if e.Title != "" {
+			return fmt.Sprintf("goldsky API error (%s): %s", e.Type, e.Title)
+		}
+		return fmt.Sprintf("goldsky API error (%s)", e.Type)
 	}
 	if e.Detail != "" {
 		return fmt.Sprintf("goldsky API error %d (%s): %s", status, e.Type, e.Detail)
@@ -135,9 +141,9 @@ func (e *ProblemDetails) RetryAfter() (seconds int, ok bool) {
 	return parseRetryAfter(e.Headers.Get("Retry-After"))
 }
 
-// TransportError describes a failure below the API contract: a network error,
-// a malformed response, or an HTTP status that did not carry a problem body.
-// It never includes the request Authorization header or the Edge API key.
+// TransportError describes a failure below the API contract, such as a network
+// error or a malformed successful response. It never includes the request
+// Authorization header or the Edge API key.
 type TransportError struct {
 	// Op is a short label for the failing operation.
 	Op string

@@ -3,10 +3,11 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	goldsky "github.com/tigusigalpa/goldsky-go"
@@ -17,9 +18,13 @@ func main() {
 	if edgeKey == "" {
 		log.Fatal("GOLDSKY_EDGE_API_KEY is not set; this is a separate secret from GOLDSKY_API_KEY")
 	}
+	apiKey := os.Getenv("GOLDSKY_API_KEY")
+	if apiKey == "" {
+		log.Fatal("GOLDSKY_API_KEY is not set; NewClient requires the REST project token even when this example only calls Edge RPC")
+	}
 	chainID := int64(1) // Ethereum mainnet; see client.Catalogs.EdgeNetworks() for the list
 
-	client, err := goldsky.NewClient(os.Getenv("GOLDSKY_API_KEY"), goldsky.WithEdgeAPIKey(edgeKey))
+	client, err := goldsky.NewClient(apiKey, goldsky.WithEdgeAPIKey(edgeKey))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -32,7 +37,7 @@ func main() {
 		log.Fatalf("rpc call: %v", err)
 	}
 
-	n, err := json.Number(block).Int64()
+	n, err := strconv.ParseUint(strings.TrimPrefix(block, "0x"), 16, 64)
 	if err != nil {
 		fmt.Printf("raw result: %s\n", block)
 	} else {

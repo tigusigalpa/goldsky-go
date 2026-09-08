@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -68,15 +69,27 @@ type RPCService struct {
 	edgeAPIKey string
 	baseURL    string
 	idCounter  atomic.Int64
-	mu         sync.Mutex
+	mu         sync.RWMutex
 }
 
 // EndpointURL builds the Edge RPC URL for the given chain ID. The Edge API key
 // is included as a query parameter.
 func (s *RPCService) EndpointURL(chainID int64) string {
 	q := url.Values{}
-	q.Set("key", s.edgeAPIKey)
-	return s.baseURL + "/" + strconv.FormatInt(chainID, 10) + "?" + q.Encode()
+	q.Set("key", s.apiKey())
+	return strings.TrimRight(s.baseURL, "/") + "/" + strconv.FormatInt(chainID, 10) + "?" + q.Encode()
+}
+
+func (s *RPCService) apiKey() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.edgeAPIKey
+}
+
+func (s *RPCService) setAPIKey(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.edgeAPIKey = key
 }
 
 // nextRequestID returns a monotonically increasing JSON-RPC request ID.
@@ -88,8 +101,14 @@ func (s *RPCService) nextRequestID() int64 {
 // result is written into it; pass a *json.RawMessage to keep raw bytes. A
 // non-nil *RPCError is returned when the server reports a JSON-RPC error.
 func (s *RPCService) Call(ctx context.Context, chainID int64, method string, params any, result any) error {
-	if s.edgeAPIKey == "" {
+	if s.apiKey() == "" {
 		return fmt.Errorf("goldsky rpc: Edge API key is required; set it with WithEdgeAPIKey or SetEdgeAPIKey")
+	}
+	if chainID <= 0 {
+		return fmt.Errorf("goldsky rpc: chain ID must be positive, got %d", chainID)
+	}
+	if strings.TrimSpace(method) == "" {
+		return fmt.Errorf("goldsky rpc: method is required")
 	}
 	req := rpcRequest{JSONRPC: "2.0", Method: method, Params: params, ID: s.nextRequestID()}
 	resp, err := s.post(ctx, chainID, req)
@@ -112,14 +131,20 @@ func (s *RPCService) Call(ctx context.Context, chainID int64, method string, par
 // matched to the calls by index. A non-nil error indicates a transport or
 // decode failure; individual JSON-RPC errors are available on each response.
 func (s *RPCService) Batch(ctx context.Context, chainID int64, calls []RPCBatchCall) ([]RPCResponse, error) {
-	if s.edgeAPIKey == "" {
+	if s.apiKey() == "" {
 		return nil, fmt.Errorf("goldsky rpc: Edge API key is required; set it with WithEdgeAPIKey or SetEdgeAPIKey")
 	}
 	if len(calls) == 0 {
 		return nil, nil
 	}
+	if chainID <= 0 {
+		return nil, fmt.Errorf("goldsky rpc: chain ID must be positive, got %d", chainID)
+	}
 	reqs := make([]rpcRequest, len(calls))
 	for i, c := range calls {
+		if strings.TrimSpace(c.Method) == "" {
+			return nil, fmt.Errorf("goldsky rpc: method is required for batch call %d", i)
+		}
 		reqs[i] = rpcRequest{JSONRPC: "2.0", Method: c.Method, Params: c.Params, ID: s.nextRequestID()}
 	}
 	resps, err := s.postBatch(ctx, chainID, reqs)
@@ -128,6 +153,9 @@ func (s *RPCService) Batch(ctx context.Context, chainID int64, calls []RPCBatchC
 	}
 	byID := make(map[int64]RPCResponse, len(resps))
 	for _, r := range resps {
+		if _, exists := byID[r.ID]; exists {
+			return nil, &TransportError{Op: "rpc.Batch", Err: fmt.Errorf("duplicate response id %d", r.ID)}
+		}
 		byID[r.ID] = r
 	}
 	out := make([]RPCResponse, len(calls))
@@ -181,6 +209,9 @@ func (s *RPCService) post(ctx context.Context, chainID int64, req rpcRequest) (R
 	var out RPCResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return RPCResponse{}, &TransportError{Op: "rpc", Err: fmt.Errorf("decode rpc response: %w", err)}
+	}
+	if out.ID != req.ID {
+		return RPCResponse{}, &TransportError{Op: "rpc", Err: fmt.Errorf("response id %d does not match request id %d", out.ID, req.ID)}
 	}
 	return out, nil
 }
