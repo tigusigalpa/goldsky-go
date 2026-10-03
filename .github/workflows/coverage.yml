@@ -21,7 +21,7 @@ jobs:
           echo "Total library coverage: ${coverage}%"
           awk -v coverage="$coverage" 'BEGIN { exit !(coverage >= 80) }'
       - name: Upload to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: ./coverage.out
           flags: unittests
